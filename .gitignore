@@ -1,0 +1,9 @@
+node_modules/
+.env
+*.json.bak
+*.csv
+*.json
+*.png
+*.html
+*.zip
+tmp_methodist/
