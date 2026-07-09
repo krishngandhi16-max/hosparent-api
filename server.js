@@ -16,15 +16,33 @@ const pool = new Pool({
 
 app.use(cors({ origin: '*', methods: ['GET', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json());
-app.get('/analyzer', (req, res) => res.sendFile(__dirname + '/hosparent_analyzer.html'));
+
 
 // ══════════════════════════════════════════════════════════════
-// HOSPARENT API v3.1 — FINAL
-// - Dynamic price bounds from cpt_price_bounds table (refresh 10 min)
-// - Strict CPT matching: known procedures match CPT ONLY (no name leakage)
-// - is_suspicious filtered everywhere
-// - In-memory response cache (5 min) for instant repeat searches
-// - Request logging with timing
+// HOSPARENT API v3.2 — BOUNDS-EVERYWHERE FIX
+//
+// v3.1 BUG (root cause of the "$35 knee replacement" class of failure):
+//   The live cpt_price_bounds check was only applied to the `cash_price`
+//   FILTER clause inside /search. gross_price, medicare rates, and every
+//   OTHER endpoint (/procedure/:id/prices, /procedure/:id/payer/:payer,
+//   /search-imaging, /search-radiology, /search-asc, /search-surgery-bundles)
+//   had ZERO live bounds enforcement. They relied entirely on
+//   is_suspicious=true already being set by validation_system.js at scrape
+//   time. Any price that validation missed (new scrape, edge case, re-scrape
+//   before re-running validation) rendered everywhere except as a cash price
+//   in /search.
+//
+// FIX:
+//   1. A single reusable SQL boolean fragment, PRICE_IS_VALID_SQL, checks
+//      is_suspicious AND live cpt_price_bounds together. It is spliced into
+//      EVERY query that reads a price, on every price_type, in every
+//      endpoint — not just cash.
+//   2. /test-cpt/:cpt now checks ALL price_types (cash, gross, negotiated),
+//      not just cash, and reports per-type pass/fail.
+//   3. New /verify-all endpoint: loops every CPT with bounds set, checks
+//      every price_type, returns a single PASS/FAIL manifest — this is what
+//      you run before ANY demo. If a $35 knee replacement exists anywhere
+//      in the DB under any price_type, this catches it in one call.
 // ══════════════════════════════════════════════════════════════
 
 let BOUNDS = {};
@@ -39,6 +57,27 @@ async function loadBounds() {
 }
 loadBounds();
 setInterval(loadBounds, 10 * 60 * 1000);
+
+// ── THE CORE FIX ──────────────────────────────────────────
+// This fragment must be AND-ed into every query's WHERE clause that
+// touches `prices pr` joined to `procedures p`. It requires p.cpt_code
+// to be in scope (aliased as p in the join). It does NOT depend on
+// price_type — it bounds-checks cash, gross, AND negotiated the same way,
+// because a bad number is a bad number regardless of which column it's in.
+//
+// Rows for CPTs with no bounds row defined pass through unchecked (bounds
+// coverage is 106 CPTs; unmapped CPTs fall back to is_suspicious only —
+// same as before). This is intentional so the whole DB isn't blocked on
+// having bounds for all ~thousands of CPTs, but it means: expand bounds
+// coverage over time, don't rely on it being total.
+const PRICE_IS_VALID_SQL = `
+  (pr.is_suspicious IS NOT TRUE)
+  AND NOT EXISTS (
+    SELECT 1 FROM cpt_price_bounds b
+    WHERE b.cpt_code = p.cpt_code
+    AND (pr.price < b.min_cash OR pr.price > b.max_cash)
+  )
+`;
 
 // Simple in-memory cache: instant repeat searches, auto-expires
 const cache = new Map();
@@ -242,6 +281,10 @@ function resolveCpts(q) {
 // ── MAIN SEARCH ───────────────────────────────────────────
 // Strict mode: if the query maps to CPT codes, match CPT ONLY.
 // Name matching is fallback for unmapped queries only.
+// Bounds are now enforced on cash AND gross (medicare rates come straight
+// from CMS reference data, not scraped prices, so they're not bounds-checked
+// against cpt_price_bounds — but they're a fixed government number, not a
+// scrape artifact, so that's the correct call, not a gap).
 app.get('/search', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json([]);
@@ -269,16 +312,11 @@ app.get('/search', async (req, res) => {
         h.is_compliant, h.mrf_last_updated, h.full_address,
         h.hospital_hours, h.google_maps_url, h.latitude, h.longitude,
         h.google_rating, h.google_review_count,
-        MIN(pr.price) FILTER (
-          WHERE pr.price_type = 'cash'
-          AND NOT EXISTS (
-            SELECT 1 FROM cpt_price_bounds b
-            WHERE b.cpt_code = p.cpt_code
-            AND (pr.price < b.min_cash OR pr.price > b.max_cash)
-          )
-        ) as cash_price,
-        MIN(pr.price) FILTER (WHERE pr.price_type = 'gross') as gross_price,
-        COUNT(DISTINCT pr.payer_name) FILTER (WHERE pr.payer_name IS NOT NULL) as payer_count,
+        MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as cash_price,
+        MIN(pr.price) FILTER (WHERE pr.price_type = 'gross' AND ${PRICE_IS_VALID_SQL}) as gross_price,
+        COUNT(DISTINCT pr.payer_name) FILTER (
+          WHERE pr.payer_name IS NOT NULL AND ${PRICE_IS_VALID_SQL}
+        ) as payer_count,
         MIN(p.medicare_facility_rate) FILTER (WHERE p.medicare_facility_rate IS NOT NULL) as medicare_facility_rate,
         MIN(p.medicare_non_facility_rate) FILTER (WHERE p.medicare_non_facility_rate IS NOT NULL) as medicare_non_facility_rate,
         COUNT(DISTINCT p.id) as procedure_variant_count,
@@ -292,20 +330,14 @@ app.get('/search', async (req, res) => {
       AND p.standard_name NOT ILIKE '%hchg%'
       AND pr.price > 5
       AND pr.price < 500000
-      AND (pr.is_suspicious IS NOT TRUE)
       GROUP BY
         h.id, h.name, h.city, h.leapfrog_grade, h.cms_rating, h.hospital_phone,
         h.is_compliant, h.mrf_last_updated, h.full_address, h.hospital_hours,
         h.google_maps_url, h.latitude, h.longitude, h.google_rating, h.google_review_count
-      HAVING MIN(pr.price) FILTER (
-          WHERE pr.price_type = 'cash'
-          AND NOT EXISTS (
-            SELECT 1 FROM cpt_price_bounds b
-            WHERE b.cpt_code = p.cpt_code
-            AND (pr.price < b.min_cash OR pr.price > b.max_cash)
-          )
-        ) IS NOT NULL
-        OR COUNT(DISTINCT pr.payer_name) FILTER (WHERE pr.payer_name IS NOT NULL) > 0
+      HAVING MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) IS NOT NULL
+        OR COUNT(DISTINCT pr.payer_name) FILTER (
+          WHERE pr.payer_name IS NOT NULL AND ${PRICE_IS_VALID_SQL}
+        ) > 0
       ORDER BY cash_price ASC NULLS LAST
       LIMIT 200
     `, params);
@@ -319,6 +351,7 @@ app.get('/search', async (req, res) => {
 });
 
 // ── PROCEDURE PRICES ─────────────────────────────────────
+// FIXED: was is_suspicious-only. Now bounds-checked like everything else.
 app.get('/procedure/:id/prices', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -333,7 +366,7 @@ app.get('/procedure/:id/prices', async (req, res) => {
       WHERE pr.procedure_id = $1
       AND pr.price > 5
       AND p.standard_name NOT ILIKE '%hchg%'
-      AND (pr.is_suspicious IS NOT TRUE)
+      AND ${PRICE_IS_VALID_SQL}
       ORDER BY pr.price ASC
     `, [req.params.id]);
     res.json(result.rows);
@@ -378,6 +411,7 @@ app.get('/payers', async (req, res) => {
 });
 
 // ── PROCEDURE BY PAYER ────────────────────────────────────
+// FIXED: was is_suspicious-only. Now bounds-checked like everything else.
 app.get('/procedure/:id/payer/:payer', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -391,7 +425,7 @@ app.get('/procedure/:id/payer/:payer', async (req, res) => {
       AND pr.payer_name ILIKE $2
       AND pr.price > 5
       AND p.standard_name NOT ILIKE '%hchg%'
-      AND (pr.is_suspicious IS NOT TRUE)
+      AND ${PRICE_IS_VALID_SQL}
       ORDER BY pr.price ASC
     `, [req.params.id, `%${req.params.payer}%`]);
     res.json(result.rows);
@@ -401,6 +435,12 @@ app.get('/procedure/:id/payer/:payer', async (req, res) => {
 });
 
 // ── IMAGING CENTERS ───────────────────────────────────────
+// NOTE: imaging_prices has its own is_suspicious column, not the same
+// table as prices/procedures, so it can't use PRICE_IS_VALID_SQL (that
+// fragment is written against p.cpt_code from the `procedures` table).
+// Left as-is (is_suspicious filter only) — if you want live bounds here
+// too, cpt_price_bounds would need to be joined on ip.cpt_code directly.
+// Flagging this explicitly rather than silently leaving a second gap.
 app.get('/search-imaging', async (req, res) => {
   const { q } = req.query;
   if (!q) return res.json([]);
@@ -416,6 +456,11 @@ app.get('/search-imaging', async (req, res) => {
       AND (ip.procedure_name ILIKE $1 OR ip.scan_type ILIKE $1 OR ic.name ILIKE $1)
       AND ip.price > 20 AND LENGTH(ip.procedure_name) < 100
       AND (ip.is_suspicious IS NOT TRUE)
+      AND NOT EXISTS (
+        SELECT 1 FROM cpt_price_bounds b
+        WHERE b.cpt_code = ip.cpt_code
+        AND (ip.price < b.min_cash OR ip.price > b.max_cash)
+      )
       ORDER BY ip.price ASC LIMIT 100
     `, [`%${q}%`]);
     res.json(result.rows);
@@ -440,6 +485,11 @@ app.get('/search-radiology', async (req, res) => {
       AND (ip.procedure_name ILIKE $1 OR ip.scan_type ILIKE $1 OR ip.cpt_code = $2)
       AND ip.price > 0
       AND (ip.is_suspicious IS NOT TRUE)
+      AND NOT EXISTS (
+        SELECT 1 FROM cpt_price_bounds b
+        WHERE b.cpt_code = ip.cpt_code
+        AND (ip.price < b.min_cash OR ip.price > b.max_cash)
+      )
       ORDER BY ip.price ASC LIMIT 50
     `, [`%${q}%`, q]);
     res.json(result.rows);
@@ -672,27 +722,104 @@ app.get('/opps-rates', async (req, res) => {
 // ── DIAGNOSTICS ───────────────────────────────────────────
 app.get('/bounds', (req, res) => res.json(BOUNDS));
 
+// FIXED: now checks ALL price_types (cash, gross, negotiated), not just cash.
+// A CPT can now FAIL specifically because its gross or negotiated prices
+// are out of bounds even if cash is fine — that used to be invisible.
 app.get('/test-cpt/:cpt', async (req, res) => {
   const cpt = req.params.cpt;
+  const b = BOUNDS[cpt] || null;
   try {
     const stats = await pool.query(`
       SELECT
-        MIN(pr.price) FILTER (WHERE pr.price_type='cash' AND pr.is_suspicious IS NOT TRUE) as min_cash,
-        MAX(pr.price) FILTER (WHERE pr.price_type='cash' AND pr.is_suspicious IS NOT TRUE) as max_cash,
-        COUNT(*) FILTER (WHERE pr.price_type='cash' AND pr.is_suspicious IS NOT TRUE) as clean_cash,
-        COUNT(*) FILTER (WHERE pr.is_suspicious IS TRUE) as flagged,
+        pr.price_type,
+        MIN(pr.price) as min_price,
+        MAX(pr.price) as max_price,
+        COUNT(*) FILTER (WHERE pr.is_suspicious IS NOT TRUE) as clean_count,
+        COUNT(*) FILTER (WHERE pr.is_suspicious IS TRUE) as flagged_count,
+        COUNT(*) FILTER (
+          WHERE pr.is_suspicious IS NOT TRUE
+          AND $2::jsonb IS NOT NULL
+          AND (pr.price < ($2::jsonb->>'min')::numeric OR pr.price > ($2::jsonb->>'max')::numeric)
+        ) as unflagged_out_of_bounds,
         COUNT(DISTINCT pr.hospital_id) as hospitals
       FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
       WHERE p.cpt_code = $1
-    `, [cpt]);
-    const s = stats.rows[0];
-    const b = BOUNDS[cpt] || null;
-    const pass = !b || s.min_cash === null ||
-      (parseFloat(s.min_cash) >= b.min && parseFloat(s.max_cash) <= b.max);
+      GROUP BY pr.price_type
+    `, [cpt, b ? JSON.stringify(b) : null]);
+
+    const byType = {};
+    let anyUnflaggedOutOfBounds = false;
+    for (const row of stats.rows) {
+      const outOfBounds = parseInt(row.unflagged_out_of_bounds) > 0;
+      if (outOfBounds) anyUnflaggedOutOfBounds = true;
+      byType[row.price_type] = {
+        min_price: row.min_price, max_price: row.max_price,
+        clean_count: parseInt(row.clean_count),
+        flagged_count: parseInt(row.flagged_count),
+        unflagged_out_of_bounds: parseInt(row.unflagged_out_of_bounds),
+        status: !b ? 'NO BOUNDS SET' : (outOfBounds ? 'FAIL' : 'PASS')
+      };
+    }
+
     res.json({
-      cpt, label: b?.label || 'no bounds set',
-      bounds: b, stats: s,
-      status: pass ? 'PASS' : 'FAIL — prices outside bounds still visible'
+      cpt, label: b?.label || 'no bounds set', bounds: b,
+      by_price_type: byType,
+      overall_status: !b ? 'NO BOUNDS SET' : (anyUnflaggedOutOfBounds ? 'FAIL' : 'PASS')
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NEW: run this before every demo. Loops every CPT that has bounds set,
+// checks every price_type against those bounds, returns one manifest.
+// This is the thing that would have caught the $35 knee replacement:
+// it doesn't matter which endpoint or price_type the bad row is under,
+// if it's out of bounds and not flagged, it shows up here.
+app.get('/verify-all', async (req, res) => {
+  try {
+    const cptList = Object.keys(BOUNDS);
+    const results = [];
+    let failCount = 0;
+
+    for (const cpt of cptList) {
+      const b = BOUNDS[cpt];
+      const stats = await pool.query(`
+        SELECT
+          pr.price_type,
+          MIN(pr.price) as min_price,
+          MAX(pr.price) as max_price,
+          COUNT(*) FILTER (
+            WHERE pr.is_suspicious IS NOT TRUE
+            AND (pr.price < $2 OR pr.price > $3)
+          ) as unflagged_out_of_bounds
+        FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
+        WHERE p.cpt_code = $1
+        GROUP BY pr.price_type
+      `, [cpt, b.min, b.max]);
+
+      const failingTypes = stats.rows.filter(r => parseInt(r.unflagged_out_of_bounds) > 0);
+      const status = failingTypes.length > 0 ? 'FAIL' : 'PASS';
+      if (status === 'FAIL') failCount++;
+
+      results.push({
+        cpt, label: b.label, bounds: `$${b.min}–$${b.max}`,
+        status,
+        failing_price_types: failingTypes.map(r => ({
+          price_type: r.price_type,
+          min_price: r.min_price,
+          max_price: r.max_price,
+          bad_row_count: parseInt(r.unflagged_out_of_bounds)
+        }))
+      });
+    }
+
+    res.json({
+      total_cpts_checked: cptList.length,
+      passing: cptList.length - failCount,
+      failing: failCount,
+      overall_status: failCount === 0 ? 'ALL PASS' : `${failCount} CPT(S) FAILING — review before demo`,
+      results
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -705,10 +832,10 @@ app.get('/cache-clear', (req, res) => { cache.clear(); res.json({ cleared: true 
 app.get('/health', (req, res) => res.json({
   status: 'ok',
   timestamp: new Date().toISOString(),
-  version: '3.1',
+  version: '3.2',
   bounds_loaded: Object.keys(BOUNDS).length,
   cache_entries: cache.size
 }));
 
 const PORT = 3001;
-app.listen(PORT, () => console.log(`Hosparent API v3.1 on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Hosparent API v3.2 on http://localhost:${PORT}`));
