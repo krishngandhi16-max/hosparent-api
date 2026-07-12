@@ -289,6 +289,40 @@ async function main() {
   console.log(`  Review queue (NOT auto-flagged, needs your eyes): ${Number(rq.n).toLocaleString()} cohorts / ${Number(rq.rows).toLocaleString()} rows -> SELECT * FROM audit_review_queue ORDER BY n_rows DESC;`);
   report.stages.review_queue = rq;
 
+  // ── E5. unflag-cleared candidates ─────────────────────────────────────────
+  // Rows flagged by earlier blunt passes (all have NULL validation_reason, so
+  // provenance is unknowable) that the evidence now clears on EVERY count:
+  // not re-flagged by any rule above, name genuinely matches the CPT, a
+  // Medicare benchmark exists, and the price sits inside the banded envelope.
+  // Rows with no benchmark or a weak/DRG name stay hidden — conservative.
+  console.log('\n[E5] Computing unflag-cleared candidates (previously hidden, now evidence-cleared)...');
+  await q(`DROP TABLE IF EXISTS audit_unflag_cleared`);
+  await q(`
+    CREATE UNLOGGED TABLE audit_unflag_cleared AS
+    SELECT pr.id AS price_id
+    FROM prices pr
+    JOIN procedures p ON p.id = pr.procedure_id
+    JOIN audit_name_match nm ON nm.procedure_id = p.id
+    JOIN audit_benchmarks b ON b.cpt_code = p.cpt_code
+    WHERE pr.is_suspicious IS TRUE
+      AND pr.validation_reason IS NULL
+      AND pr.price > 0
+      AND nm.sim >= ${CONFIG.goodNameSim} AND NOT nm.is_drg_name
+      AND pr.price >= b.bench * ${CONFIG.lowRatio}
+      AND pr.price <= b.bench * (${bandCaseSql('b.bench')})
+      AND NOT EXISTS (SELECT 1 FROM audit_price_flags f WHERE f.price_id = pr.id)`);
+  await q(`CREATE INDEX ON audit_unflag_cleared(price_id)`);
+  const uc = await one(`SELECT COUNT(*) AS n FROM audit_unflag_cleared`);
+  console.log(`  ${Number(uc.n).toLocaleString()} flagged rows are cleared by the evidence (apply with --unflag-cleared)`);
+  const ucTop = await q(`
+    SELECT p.cpt_code, MIN(p.standard_name) AS name, pr.price_type, COUNT(*) AS n,
+           ROUND(MIN(pr.price)::numeric) AS min_p, ROUND(MAX(pr.price)::numeric) AS max_p
+    FROM audit_unflag_cleared u JOIN prices pr ON pr.id = u.price_id
+    JOIN procedures p ON p.id = pr.procedure_id
+    GROUP BY p.cpt_code, pr.price_type ORDER BY n DESC LIMIT 15`);
+  for (const r of ucTop.rows) console.log(`    ${r.cpt_code} ${String(r.name).slice(0, 38).padEnd(38)} ${r.price_type.padEnd(10)} ${Number(r.n).toLocaleString()} rows ($${r.min_p}-$${r.max_p})`);
+  report.stages.unflag_cleared = { total: Number(uc.n), top: ucTop.rows };
+
   if (!APPLY) {
     const sample = await q(`
       SELECT f.rule, f.reason, pr.price, p.cpt_code, p.standard_name
@@ -357,7 +391,32 @@ async function main() {
     report.stages.unflagged_stale = unflagged;
   }
 
-  // F3: optional undo of an earlier blunt pass (e.g. fix_all_leaks 20x)
+  // F3a: unflag rows the evidence has cleared (see E5 for criteria)
+  if (process.argv.includes('--unflag-cleared')) {
+    const ucN = await countBefore('evidence-cleared rows to unflag',
+      `SELECT COUNT(*) AS n FROM audit_unflag_cleared u JOIN prices pr ON pr.id = u.price_id
+       WHERE pr.is_suspicious IS TRUE`);
+    if (ucN > 0) {
+      const un = await applyInBatches({
+        label: 'unflag cleared', workTable: 'audit_unflag_cleared', batchSize: CONFIG.batchSize,
+        applySqlFn: (lo, hi) => ({
+          sql: `UPDATE prices pr
+                SET is_suspicious = false,
+                    validation_reason = 'AUDIT: cleared — within banded envelope, name matches CPT'
+                FROM (SELECT price_id FROM audit_unflag_cleared WHERE price_id BETWEEN $1 AND $2) s
+                WHERE pr.id = s.price_id AND pr.is_suspicious IS TRUE AND pr.validation_reason IS NULL`,
+          params: [lo, hi],
+        }),
+      });
+      console.log(`  Unflagged ${un.toLocaleString()} evidence-cleared rows (audit trail kept in validation_reason)`);
+      await verifyAfter('cleared rows now visible',
+        `SELECT COUNT(*) AS n FROM audit_unflag_cleared u JOIN prices pr ON pr.id = u.price_id
+         WHERE pr.is_suspicious IS TRUE AND pr.validation_reason IS NULL`);
+      report.stages.unflagged_cleared = un;
+    }
+  }
+
+  // F3b: optional undo of an earlier blunt pass by reason pattern
   if (UNFLAG_PATTERN) {
     await q(`DROP TABLE IF EXISTS audit_unflag_old`);
     await q(`
