@@ -1,7 +1,0 @@
- 
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=hosparent
-DB_USER=postgres
-DB_PASSWORD=Lego1234
-ANTHROPIC_API_KEY=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
