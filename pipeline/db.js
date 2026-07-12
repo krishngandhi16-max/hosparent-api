@@ -10,7 +10,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+// pg is only needed for direct connections — bridge mode must work without it
+let Pool = null;
+try { ({ Pool } = require('pg')); } catch (e) { /* fine if BRIDGE_URL is set */ }
 
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
@@ -71,6 +73,10 @@ if (BRIDGE_URL) {
   console.log(`[db] transport: DB bridge at ${BRIDGE_URL}`);
   pool = { query: (sql, params) => bridgeQuery(sql, params), end: async () => {} };
 } else {
+  if (!Pool) {
+    console.error('pg module not installed and no BRIDGE_URL set — nothing to connect with.');
+    process.exit(1);
+  }
   pool = new Pool({
     host: process.env.DB_HOST || env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || env.DB_PORT || '5432', 10),
