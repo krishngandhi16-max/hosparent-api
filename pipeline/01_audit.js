@@ -139,24 +139,28 @@ async function main() {
       WHERE p.cpt_code IS NOT NULL AND p.standard_name IS NOT NULL
       GROUP BY p.id, p.cpt_code, p.standard_name`, [CONFIG.drgNameRegex]);
   } else if (mr && mr.descCol) {
-    // JS fallback: Dice coefficient over word sets (only ~tens of thousands of pairs)
-    const pairs = await q(`
-      SELECT p.id, p.cpt_code, lower(p.standard_name) AS name,
-             lower(string_agg(m.${mr.descCol}, ' ')) AS descr,
-             p.standard_name ~* $1 AS is_drg_name
-      FROM procedures p JOIN medicare_rates m ON m.${mr.codeCol}::text = p.cpt_code
-      WHERE p.cpt_code IS NOT NULL AND p.standard_name IS NOT NULL
-      GROUP BY p.id, p.cpt_code, p.standard_name`, [CONFIG.drgNameRegex]);
+    // JS fallback: Dice coefficient over word sets. Keyset-paginated so it
+    // works over the DB bridge (which caps responses at 5000 rows).
     const tok = s => new Set(String(s).split(/[^a-z0-9]+/).filter(w => w.length > 2));
-    for (let i = 0; i < pairs.rows.length; i += 1000) {
-      const chunk = pairs.rows.slice(i, i + 1000);
-      const values = chunk.map(r => {
+    let lastId = 0;
+    for (;;) {
+      const pairs = await q(`
+        SELECT p.id, p.cpt_code, lower(p.standard_name) AS name,
+               lower(string_agg(m.${mr.descCol}, ' ')) AS descr,
+               p.standard_name ~* $1 AS is_drg_name
+        FROM procedures p JOIN medicare_rates m ON m.${mr.codeCol}::text = p.cpt_code
+        WHERE p.cpt_code IS NOT NULL AND p.standard_name IS NOT NULL AND p.id > $2
+        GROUP BY p.id, p.cpt_code, p.standard_name
+        ORDER BY p.id LIMIT 2000`, [CONFIG.drgNameRegex, lastId]);
+      if (!pairs.rows.length) break;
+      lastId = Number(pairs.rows[pairs.rows.length - 1].id);
+      const values = pairs.rows.map(r => {
         const a = tok(r.name), b = tok(r.descr);
         let shared = 0; for (const w of a) if (b.has(w)) shared++;
         const sim = (a.size + b.size) ? (2 * shared) / (a.size + b.size) : 0;
         return `(${r.id}, '${r.cpt_code.replace(/'/g, "''")}', ${sim.toFixed(3)}, ${r.is_drg_name})`;
       });
-      await q(`INSERT INTO audit_name_match VALUES ${values.join(',')}`);
+      await q(`INSERT INTO audit_name_match VALUES ${values.join(',')} ON CONFLICT (procedure_id) DO NOTHING`);
     }
   } else {
     await q(`

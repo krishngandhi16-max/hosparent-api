@@ -26,16 +26,62 @@ function loadEnv() {
 
 const env = loadEnv();
 
-const pool = new Pool({
-  host: process.env.DB_HOST || env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || env.DB_PORT || '5432', 10),
-  database: process.env.DB_NAME || env.DB_NAME || 'hosparent',
-  user: process.env.DB_USER || env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || env.DB_PASSWORD,
-  max: 4,
-  // long statement timeout: cohort stats over 48.6M rows are slow but bounded
-  statement_timeout: 30 * 60 * 1000,
-});
+// ── transport: direct pg, or the dbbridge.js HTTPS bridge ──────────────────
+// Set BRIDGE_URL + BRIDGE_TOKEN to run the whole pipeline through the bridge
+// (e.g. from a remote Claude session while dbbridge.js + a Cloudflare quick
+// tunnel run on the machine that hosts Postgres):
+//   BRIDGE_URL=https://xxxx.trycloudflare.com BRIDGE_TOKEN=... node pipeline/00_preflight.js
+const BRIDGE_URL = (process.env.BRIDGE_URL || '').replace(/\/$/, '');
+const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN;
+
+async function bridgeQuery(sql, params) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(BRIDGE_URL + '/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + BRIDGE_TOKEN },
+        body: JSON.stringify({ sql, params }),
+        signal: AbortSignal.timeout(35 * 60 * 1000),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(body.error || `bridge HTTP ${res.status}`);
+        err.noRetry = res.status < 500; // SQL errors etc. — retrying won't help
+        throw err;
+      }
+      const rows = body.rows || [];
+      if (rows.length === 5000) {
+        console.warn('  [bridge] WARNING: result hit the 5000-row bridge cap — paginate this query');
+      }
+      return { rows, rowCount: body.rowCount != null ? body.rowCount : rows.length };
+    } catch (e) {
+      if (e.noRetry || attempt >= 3) throw e;
+      console.log(`  [bridge] ${e.message} — retry ${attempt}/2 in ${attempt * 10}s`);
+      await new Promise(r => setTimeout(r, attempt * 10000));
+    }
+  }
+}
+
+let pool;
+if (BRIDGE_URL) {
+  if (!BRIDGE_TOKEN) {
+    console.error('BRIDGE_URL is set but BRIDGE_TOKEN is missing.');
+    process.exit(1);
+  }
+  console.log(`[db] transport: DB bridge at ${BRIDGE_URL}`);
+  pool = { query: (sql, params) => bridgeQuery(sql, params), end: async () => {} };
+} else {
+  pool = new Pool({
+    host: process.env.DB_HOST || env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || env.DB_PORT || '5432', 10),
+    database: process.env.DB_NAME || env.DB_NAME || 'hosparent',
+    user: process.env.DB_USER || env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || env.DB_PASSWORD,
+    max: 4,
+    // long statement timeout: cohort stats over 48.6M rows are slow but bounded
+    statement_timeout: 30 * 60 * 1000,
+  });
+}
 
 async function q(sql, params) {
   return pool.query(sql, params);

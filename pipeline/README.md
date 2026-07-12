@@ -58,6 +58,29 @@ replacement professional fee billed at $44K (38x) is a DRG bundle leak. Flat
 …and only when the price also exceeds its own cohort's p75 × 4 AND the
 procedure name does NOT match its CPT description (otherwise → review queue).
 
+## Remote mode (DB bridge)
+
+Every stage can also run from a machine that can't reach Postgres directly
+(e.g. a remote Claude session), through `dbbridge.js` + a Cloudflare quick
+tunnel running on the DB host:
+
+```bash
+BRIDGE_URL=https://<random>.trycloudflare.com BRIDGE_TOKEN=<token> node pipeline/00_preflight.js
+```
+
+On the DB host (PowerShell), start/restart the bridge with:
+
+```powershell
+cd C:\Users\krish\hosparent
+Start-Process powershell -ArgumentList '-NoExit','-Command','cd C:\Users\krish\hosparent; node dbbridge.js'
+Start-Process powershell -ArgumentList '-NoExit','-Command','cloudflared tunnel --url http://localhost:3999'
+Get-Content .env | Select-String DBBRIDGE_TOKEN   # the token to hand to the remote side
+```
+
+The quick-tunnel URL CHANGES on every restart — send the new URL each time.
+Closing both windows kills all remote access. The `node dbbridge.js` window
+logs every query it executes.
+
 ## Outputs
 
 - `pipeline/reports/*.json` — every run writes a timestamped report (gitignored).

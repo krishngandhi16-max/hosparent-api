@@ -174,17 +174,21 @@ async function main() {
 
   // ── swap ─────────────────────────────────────────────────────────────────
   console.log('\nSWAPPING (old tables kept as *_old)...');
+  // Each swap is ONE multi-statement call: PostgreSQL wraps a multi-statement
+  // simple query in an implicit transaction, so it's atomic — and it works
+  // over the DB bridge, where separate calls may land on different pooled
+  // connections (explicit BEGIN/COMMIT across calls would not).
   for (const t of ['cpt_price_summary', 'payer_price_summary', 'cpt_ui_catalog']) {
-    await q('BEGIN');
+    const exists = await tableExists(t);
     try {
-      await q(`DROP TABLE IF EXISTS ${t}_old`);
-      if (await tableExists(t)) await q(`ALTER TABLE ${t} RENAME TO ${t}_old`);
-      await q(`ALTER TABLE ${t}_new RENAME TO ${t}`);
-      await q('COMMIT');
+      await q(
+        `DROP TABLE IF EXISTS ${t}_old;` +
+        (exists ? ` ALTER TABLE ${t} RENAME TO ${t}_old;` : '') +
+        ` ALTER TABLE ${t}_new RENAME TO ${t};`
+      );
       console.log(`  ${t}: swapped (previous version -> ${t}_old)`);
     } catch (e) {
-      await q('ROLLBACK');
-      throw new Error(`swap failed for ${t}: ${e.message} — everything rolled back for this table`);
+      throw new Error(`swap failed for ${t}: ${e.message} — statement was atomic, old table untouched`);
     }
   }
   // verify
