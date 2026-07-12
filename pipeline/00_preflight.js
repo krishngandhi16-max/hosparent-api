@@ -55,6 +55,15 @@ async function main() {
     report.schema[t] = ex ? (await tableColumns(t)).map(c => c.column_name) : 'MISSING';
     console.log(`  ${t}: ${ex ? 'present [' + report.schema[t].join(', ') + ']' : 'MISSING'}`);
   }
+  // NULL-id / missing-PK landmine (found 2026-07-12: 13.7M Methodist rows had
+  // NULL id and prices has no PK — id-keyed updates silently skipped them)
+  const nullIds = await one(`SELECT COUNT(*) AS n FROM prices WHERE id IS NULL`);
+  const pk = await q(`SELECT conname FROM pg_constraint WHERE conrelid = 'prices'::regclass AND contype = 'p'`);
+  report.schema.prices_null_ids = Number(nullIds.n);
+  report.schema.prices_pk = pk.rows.length ? pk.rows[0].conname : null;
+  console.log(`  prices.id NULLs: ${Number(nullIds.n).toLocaleString()} ${Number(nullIds.n) > 0 ? '<<< RUN pipeline/01a_backfill_ids.js --apply BEFORE THE AUDIT' : '(good)'}`);
+  console.log(`  prices primary key: ${pk.rows.length ? pk.rows[0].conname : 'NONE — add after pitch (exclusive lock)'}`);
+
   const trgm = await one(`SELECT COUNT(*)::int AS n FROM pg_extension WHERE extname = 'pg_trgm'`);
   report.schema.pg_trgm = trgm.n > 0;
   console.log(`  pg_trgm extension: ${trgm.n > 0 ? 'installed' : 'NOT installed (01_audit will try CREATE EXTENSION, else fall back to keyword overlap)'}`);

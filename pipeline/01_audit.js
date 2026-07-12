@@ -235,7 +235,13 @@ async function main() {
     JOIN audit_cohorts c ON c.cpt_code = p.cpt_code AND c.price_type = pr.price_type
     WHERE pr.is_suspicious IS NOT TRUE AND pr.price < 1 AND c.median > 20`);
 
-  // E4: hand-set bounds (per price_type where the columns exist)
+  // E4: hand-set bounds (per price_type where the columns exist).
+  // Lean-feed exemption: several hand floors assume facility-loaded rates
+  // (e.g. pacemaker min_negotiated $2000 vs Medicare professional $404), but
+  // some hospitals publish legitimate professional-fee-only negotiated rates
+  // near 1x Medicare. A negotiated price >= 0.5x its Medicare benchmark is
+  // never flagged merely for being under the hand floor — only prices that
+  // are BOTH under the floor AND under half of Medicare get hidden.
   if (await tableExists('cpt_price_bounds')) {
     const bcols = (await tableColumns('cpt_price_bounds')).map(c => c.column_name);
     const typed = bcols.includes('min_negotiated');
@@ -246,7 +252,14 @@ async function main() {
       FROM prices pr
       JOIN procedures p ON p.id = pr.procedure_id
       JOIN cpt_price_bounds b ON b.cpt_code = p.cpt_code
+      LEFT JOIN audit_benchmarks bb ON bb.cpt_code = p.cpt_code
       WHERE pr.is_suspicious IS NOT TRUE
+        AND NOT (
+          pr.price_type = 'negotiated'
+          AND bb.bench IS NOT NULL
+          AND pr.price >= bb.bench * 0.5
+          AND pr.price <= ${typed ? 'COALESCE(b.max_negotiated, b.max_cash)' : 'b.max_cash'}
+        )
         AND CASE pr.price_type
           ${typed ? `
           WHEN 'cash' THEN pr.price < b.min_cash OR pr.price > b.max_cash
