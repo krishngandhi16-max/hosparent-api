@@ -323,7 +323,19 @@ async function main() {
       AND nm.sim >= ${CONFIG.goodNameSim} AND NOT nm.is_drg_name
       AND pr.price >= b.bench * ${CONFIG.lowRatio}
       AND pr.price <= b.bench * (${bandCaseSql('b.bench')})
-      AND NOT EXISTS (SELECT 1 FROM audit_price_flags f WHERE f.price_id = pr.id)`);
+      AND NOT EXISTS (SELECT 1 FROM audit_price_flags f WHERE f.price_id = pr.id)
+      -- hand bounds must also pass: E4 only evaluates rows that were clean at
+      -- audit time, so a flagged row can be inside the banded envelope yet
+      -- still violate hand bounds (e.g. DEXA gross $1514 vs max_gross $1200)
+      AND NOT EXISTS (
+        SELECT 1 FROM cpt_price_bounds hb
+        WHERE hb.cpt_code = p.cpt_code
+        AND CASE pr.price_type
+          WHEN 'cash' THEN pr.price < hb.min_cash OR pr.price > hb.max_cash
+          WHEN 'negotiated' THEN pr.price < LEAST(COALESCE(hb.min_negotiated, hb.min_cash * 0.3), b.bench * 0.5)
+                              OR pr.price > COALESCE(hb.max_negotiated, hb.max_cash)
+          WHEN 'gross' THEN pr.price < COALESCE(hb.min_gross, hb.min_cash) OR pr.price > COALESCE(hb.max_gross, hb.max_cash * 1.5)
+          ELSE false END)`);
   await q(`CREATE INDEX ON audit_unflag_cleared(price_id)`);
   const uc = await one(`SELECT COUNT(*) AS n FROM audit_unflag_cleared`);
   console.log(`  ${Number(uc.n).toLocaleString()} flagged rows are cleared by the evidence (apply with --unflag-cleared)`);
