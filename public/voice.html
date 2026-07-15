@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hosparent — Voice Agent (demo)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    #mic { font-size: 1rem; padding: .7rem 1.2rem; border-radius: 999px; border: 1px solid #8888; cursor: pointer; }
+    #mic.listening { background: #e5484d; color: #fff; border-color: #e5484d; }
+    .row { display: flex; gap: .5rem; margin: 1rem 0; }
+    #q { flex: 1; padding: .6rem; border-radius: 8px; border: 1px solid #8888; font: inherit; }
+    #log { margin-top: 1rem; }
+    .turn { padding: .6rem .8rem; border-radius: 10px; margin: .5rem 0; white-space: pre-wrap; }
+    .user { background: #8882; }
+    .agent { background: #3b82f622; }
+    .meta { font-size: .8rem; opacity: .7; }
+  </style>
+</head>
+<body>
+  <h1>🎙️ Hosparent Voice Agent <span class="meta">(browser demo — zero backend voice cost)</span></h1>
+  <p class="meta">Speak or type a question. Uses your browser's speech recognition + synthesis and the <code>/agent</code> endpoint. Upgrade to Azure AI Speech (<code>/voice</code>) for production quality.</p>
+
+  <button id="mic">🎤 Hold to talk</button>
+  <div class="row">
+    <input id="q" placeholder="…or type: why aren't the drug codes showing up?" />
+    <button id="send">Ask</button>
+  </div>
+  <div id="log"></div>
+
+<script>
+  const log = document.getElementById('log');
+  const qEl = document.getElementById('q');
+  const micBtn = document.getElementById('mic');
+
+  function add(text, who, meta) {
+    const div = document.createElement('div');
+    div.className = 'turn ' + who;
+    div.textContent = text;
+    if (meta) { const m = document.createElement('div'); m.className = 'meta'; m.textContent = meta; div.appendChild(m); }
+    log.prepend(div);
+    return div;
+  }
+
+  function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+
+  async function ask(question) {
+    if (!question) return;
+    add(question, 'user');
+    const pending = add('…thinking…', 'agent');
+    try {
+      const res = await fetch('/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      const answer = data.answer || data.error || '(no answer)';
+      pending.textContent = answer;
+      pending.className = 'turn agent';
+      if (data.actions_taken && data.actions_taken.length) {
+        const m = document.createElement('div');
+        m.className = 'meta';
+        m.textContent = 'applied: ' + data.actions_taken.map(a => a.name).join(', ');
+        pending.appendChild(m);
+      }
+      speak(answer);
+    } catch (e) {
+      pending.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  document.getElementById('send').onclick = () => { const q = qEl.value.trim(); qEl.value = ''; ask(q); };
+  qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); qEl.value = ''; ask(q); } });
+
+  // Browser speech recognition (Chrome/Edge). Hold the button, speak, release.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.onresult = (e) => ask(e.results[0][0].transcript);
+    rec.onend = () => micBtn.classList.remove('listening');
+    const start = () => { try { rec.start(); micBtn.classList.add('listening'); } catch (_) {} };
+    const stop = () => { try { rec.stop(); } catch (_) {} };
+    micBtn.addEventListener('mousedown', start);
+    micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); start(); });
+    micBtn.addEventListener('mouseup', stop);
+    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stop(); });
+  } else {
+    micBtn.disabled = true;
+    micBtn.textContent = '🎤 (speech not supported in this browser)';
+  }
+</script>
+</body>
+</html>

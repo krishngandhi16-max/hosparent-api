@@ -7,3 +7,12 @@ node_modules/
 *.html
 *.zip
 tmp_methodist/
+
+# Plaintext secrets must never be tracked
+Hosparent_notepad.txt
+
+# Exceptions: project manifests and the voice demo page must be committed
+# even though *.json / *.html are ignored above.
+!package.json
+!package-lock.json
+!public/voice.html

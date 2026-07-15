@@ -1,21 +1,48 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg');
 const cors = require('cors');
+const { pool } = require('./db'); // shared read/write pool (see db.js)
+const { runAgent } = require('./db_agent');
 
 const app = express();
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  max: 20,
-  idleTimeoutMillis: 30000,
+
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
+app.use(express.json());
+app.use(express.static('public'));
+
+// ── AGENT ─────────────────────────────────────────────────
+// Natural-language question -> Claude tool-use agent (DB + web + healthcare MCP).
+// Returns { answer, actions_taken }. See db_agent.js.
+app.post('/agent', async (req, res) => {
+  const question = (req.body && req.body.question) || '';
+  if (!question) return res.status(400).json({ error: 'missing "question"' });
+  try {
+    const result = await runAgent(question);
+    res.json(result);
+  } catch (err) {
+    console.error('[/agent]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.use(cors({ origin: '*', methods: ['GET', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
-app.use(express.json());
+// ── VOICE ─────────────────────────────────────────────────
+// Optional: POST raw WAV audio -> Azure STT -> agent -> Azure TTS (mp3 audio back).
+// Transcript + answer are also returned in response headers. Needs AZURE_SPEECH_*.
+app.post('/voice', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+  try {
+    const { transcribe, synthesize } = require('./voice');
+    const transcript = await transcribe(req.body);
+    const { answer } = await runAgent(transcript);
+    const audio = await synthesize(answer);
+    res.set('X-Transcript', encodeURIComponent(transcript));
+    res.set('X-Answer', encodeURIComponent(answer));
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(audio);
+  } catch (err) {
+    console.error('[/voice]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // ══════════════════════════════════════════════════════════════

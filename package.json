@@ -1,0 +1,22 @@
+{
+  "name": "hosparent-api",
+  "version": "1.0.0",
+  "description": "Hosparent hospital price transparency API + natural-language DB agent",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "agent": "node agent_cli.js",
+    "test": "node test_agent.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
+    "pg": "^8.22.0"
+  }
+}
