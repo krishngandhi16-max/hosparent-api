@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { pool } = require('./db'); // shared read/write pool (see db.js)
+const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js)
 const { runAgent } = require('./db_agent');
 
 const app = express();
@@ -72,32 +72,22 @@ app.post('/voice', express.raw({ type: '*/*', limit: '10mb' }), async (req, res)
 //      in the DB under any price_type, this catches it in one call.
 // ══════════════════════════════════════════════════════════════
 
-let BOUNDS = {};
-async function loadBounds() {
-  try {
-    const r = await pool.query('SELECT cpt_code, procedure_label, min_cash, max_cash FROM cpt_price_bounds');
-    const next = {};
-    for (const row of r.rows) next[row.cpt_code] = { min: parseFloat(row.min_cash), max: parseFloat(row.max_cash), label: row.procedure_label };
-    BOUNDS = next;
-    console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded`);
-  } catch (e) { console.error('[bounds]', e.message); }
-}
-loadBounds();
-setInterval(loadBounds, 10 * 60 * 1000);
-
 // ── THE CORE FIX ──────────────────────────────────────────
-// This fragment must be AND-ed into every query's WHERE clause that
-// touches `prices pr` joined to `procedures p`. It requires p.cpt_code
-// to be in scope (aliased as p in the join). It does NOT depend on
-// price_type — it bounds-checks cash, gross, AND negotiated the same way,
-// because a bad number is a bad number regardless of which column it's in.
+// PRICE_IS_VALID_SQL is AND-ed into every query that reads a price. It requires
+// p.cpt_code in scope (from the procedures join). Rows for CPTs with no bounds row
+// pass through unchecked (fall back to is_suspicious only) — same as before.
 //
-// Rows for CPTs with no bounds row defined pass through unchecked (bounds
-// coverage is 106 CPTs; unmapped CPTs fall back to is_suspicious only —
-// same as before). This is intentional so the whole DB isn't blocked on
-// having bounds for all ~thousands of CPTs, but it means: expand bounds
-// coverage over time, don't rely on it being total.
-const PRICE_IS_VALID_SQL = `
+// v3.3: it now bounds-checks EACH price_type against its OWN window —
+// negotiated against min/max_negotiated, gross against min/max_gross — with a
+// COALESCE fallback to the cash window when a type-specific bound isn't set.
+// Previously every type was checked against the CASH window only, which HID valid
+// negotiated rates below the cash floor and valid gross charges above the cash
+// ceiling (the main "our price looks wrong vs TryBilly" bug).
+//
+// Starts as the cash-only fragment (always valid) and is upgraded to per-type by
+// loadBounds() once the per-type columns are confirmed present — so there is never
+// a window where a query references a column that doesn't exist yet.
+let PRICE_IS_VALID_SQL = `
   (pr.is_suspicious IS NOT TRUE)
   AND NOT EXISTS (
     SELECT 1 FROM cpt_price_bounds b
@@ -105,6 +95,66 @@ const PRICE_IS_VALID_SQL = `
     AND (pr.price < b.min_cash OR pr.price > b.max_cash)
   )
 `;
+
+const PRICE_IS_VALID_PER_TYPE = `
+  (pr.is_suspicious IS NOT TRUE)
+  AND NOT EXISTS (
+    SELECT 1 FROM cpt_price_bounds b
+    WHERE b.cpt_code = p.cpt_code
+    AND (
+      pr.price < CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+                   WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+                   ELSE b.min_cash END
+      OR
+      pr.price > CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+                   WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+                   ELSE b.max_cash END
+    )
+  )
+`;
+
+// "This price is outside its price_type's bounds" — for the diagnostic endpoints,
+// which JOIN cpt_price_bounds as `b`. Mirrors PRICE_IS_VALID_PER_TYPE's window.
+const OUT_OF_TYPE_BOUNDS_SQL = `(
+  pr.price < CASE lower(pr.price_type)
+               WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+               WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+               ELSE b.min_cash END
+  OR pr.price > CASE lower(pr.price_type)
+               WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+               WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+               ELSE b.max_cash END
+)`;
+
+let BOUNDS = {};
+async function loadBounds() {
+  try {
+    await ensureBoundsColumns();
+    const r = await pool.query(
+      'SELECT cpt_code, procedure_label, min_cash, max_cash, min_negotiated, max_negotiated, min_gross, max_gross FROM cpt_price_bounds'
+    );
+    const num = (v, fallback) => (v != null ? parseFloat(v) : fallback);
+    const next = {};
+    for (const row of r.rows) {
+      const minC = parseFloat(row.min_cash);
+      const maxC = parseFloat(row.max_cash);
+      next[row.cpt_code] = {
+        label: row.procedure_label,
+        min: minC, max: maxC, // legacy cash fields (kept for existing callers)
+        cash: [minC, maxC],
+        negotiated: [num(row.min_negotiated, minC), num(row.max_negotiated, maxC)],
+        gross: [num(row.min_gross, minC), num(row.max_gross, maxC)],
+      };
+    }
+    BOUNDS = next;
+    PRICE_IS_VALID_SQL = PRICE_IS_VALID_PER_TYPE; // upgrade once columns confirmed present
+    console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded (per-type)`);
+  } catch (e) { console.error('[bounds]', e.message); }
+}
+loadBounds();
+setInterval(loadBounds, 10 * 60 * 1000);
 
 // Simple in-memory cache: instant repeat searches, auto-expires
 const cache = new Map();
@@ -341,6 +391,13 @@ app.get('/search', async (req, res) => {
         h.google_rating, h.google_review_count,
         MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as cash_price,
         MIN(pr.price) FILTER (WHERE pr.price_type = 'gross' AND ${PRICE_IS_VALID_SQL}) as gross_price,
+        MIN(pr.price) FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) as negotiated_price,
+        -- Representative (median) prices, so the UI can show a typical price
+        -- comparable to competitors' medians instead of only the MIN floor.
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+          FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as median_cash_price,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+          FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) as median_negotiated_price,
         COUNT(DISTINCT pr.payer_name) FILTER (
           WHERE pr.payer_name IS NOT NULL AND ${PRICE_IS_VALID_SQL}
         ) as payer_count,
@@ -615,6 +672,9 @@ app.get('/search-drugs', async (req, res) => {
   const qLower = q.toLowerCase().trim();
   const resolved = drugSynonyms[qLower] || q;
   try {
+    // FIX: also match by drug CODE. ndc and j_code were SELECTed but never
+    // searched, so searching an NDC or J-code returned nothing even though the
+    // columns are populated. $3 is the raw query, matched exactly (case-insensitive).
     const result = await pool.query(`
       SELECT dp.drug_name, dp.brand_name, dp.ndc, dp.j_code,
         dp.strength, dp.form, dp.quantity,
@@ -623,9 +683,11 @@ app.get('/search-drugs', async (req, res) => {
         dp.price, dp.price_type, dp.source, dp.source_url,
         dp.conditions, dp.is_generic
       FROM drug_prices dp
-      WHERE dp.drug_name ILIKE $1 OR dp.brand_name ILIKE $1 OR dp.drug_name ILIKE $2 OR dp.brand_name ILIKE $2
+      WHERE dp.drug_name ILIKE $1 OR dp.brand_name ILIKE $1
+         OR dp.drug_name ILIKE $2 OR dp.brand_name ILIKE $2
+         OR dp.ndc ILIKE $3 OR dp.j_code ILIKE $3
       ORDER BY dp.price ASC LIMIT 50
-    `, [`%${resolved}%`, `%${q}%`]);
+    `, [`%${resolved}%`, `%${q}%`, qLower]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -765,14 +827,16 @@ app.get('/test-cpt/:cpt', async (req, res) => {
         COUNT(*) FILTER (WHERE pr.is_suspicious IS TRUE) as flagged_count,
         COUNT(*) FILTER (
           WHERE pr.is_suspicious IS NOT TRUE
-          AND $2::jsonb IS NOT NULL
-          AND (pr.price < ($2::jsonb->>'min')::numeric OR pr.price > ($2::jsonb->>'max')::numeric)
+          AND b.cpt_code IS NOT NULL
+          AND ${OUT_OF_TYPE_BOUNDS_SQL}
         ) as unflagged_out_of_bounds,
         COUNT(DISTINCT pr.hospital_id) as hospitals
-      FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
+      FROM prices pr
+      JOIN procedures p ON p.id = pr.procedure_id
+      LEFT JOIN cpt_price_bounds b ON b.cpt_code = p.cpt_code
       WHERE p.cpt_code = $1
       GROUP BY pr.price_type
-    `, [cpt, b ? JSON.stringify(b) : null]);
+    `, [cpt]);
 
     const byType = {};
     let anyUnflaggedOutOfBounds = false;
@@ -818,12 +882,14 @@ app.get('/verify-all', async (req, res) => {
           MAX(pr.price) as max_price,
           COUNT(*) FILTER (
             WHERE pr.is_suspicious IS NOT TRUE
-            AND (pr.price < $2 OR pr.price > $3)
+            AND ${OUT_OF_TYPE_BOUNDS_SQL}
           ) as unflagged_out_of_bounds
-        FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
+        FROM prices pr
+        JOIN procedures p ON p.id = pr.procedure_id
+        JOIN cpt_price_bounds b ON b.cpt_code = p.cpt_code
         WHERE p.cpt_code = $1
         GROUP BY pr.price_type
-      `, [cpt, b.min, b.max]);
+      `, [cpt]);
 
       const failingTypes = stats.rows.filter(r => parseInt(r.unflagged_out_of_bounds) > 0);
       const status = failingTypes.length > 0 ? 'FAIL' : 'PASS';

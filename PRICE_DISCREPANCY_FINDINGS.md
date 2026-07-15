@@ -1,5 +1,30 @@
 # Baylor / Procedure Price Discrepancy vs TryBilly — Findings & Plan
 
+## ✅ Update — fixes applied (v3.3)
+
+The candidates below have now been fixed in code:
+
+1. **Cross-price-type bounds (candidate A)** — `PRICE_IS_VALID_SQL` in `server.js`
+   now judges each price_type against its **own** window (negotiated → min/max_negotiated,
+   gross → min/max_gross), COALESCE-falling back to cash. Mirrored in `db_agent.js`
+   and the `/test-cpt` + `/verify-all` diagnostics.
+2. **Sticky flags (candidate D)** — `validation_system.js` now populates the per-type
+   bound columns, flags each price_type against its own window (gross is flagged for
+   the first time), and **reconciles** — un-flagging bounds-flagged prices that now
+   fall back in range. The agent's `clear_stale_flags` does the same on demand.
+3. **`/search-drugs` code search (candidate E, drug arm)** — now matches `ndc`/`j_code`.
+4. **MIN-vs-median (candidate C)** — `/search` now also returns `negotiated_price`,
+   `median_cash_price`, and `median_negotiated_price`, so the UI can show a typical
+   price comparable to a competitor's median instead of only the MIN floor.
+
+**To activate on the live DB:** run `node validation_system.js` (creates/populates the
+columns + reconciles flags), then confirm one Baylor/TryBilly example. Candidate B
+(specific bounds too tight) remains a per-CPT data tweak in `cpt_price_bounds`.
+
+---
+
+
+
 _Status: root-cause **candidates** identified from code review. Live DB confirmation
 pending (the diagnostic session runs in a cloud container with no DB access —
 run `diagnose_price.js` locally to confirm which candidate applies to a given example)._

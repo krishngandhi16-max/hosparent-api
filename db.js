@@ -54,4 +54,22 @@ async function runReadonlySql(sql, { rowLimit = 200, timeoutMs = 5000 } = {}) {
   }
 }
 
-module.exports = { pool, readonlyPool, runReadonlySql };
+// Idempotently ensure the per-price-type bound columns exist on cpt_price_bounds.
+// Safe to call repeatedly (memoized). Lets read-time filters reference
+// min_negotiated/max_negotiated/min_gross/max_gross with a COALESCE fallback to
+// the cash window, so a DB that hasn't populated them behaves exactly as before.
+let _ensured = null;
+function ensureBoundsColumns() {
+  if (!_ensured) {
+    _ensured = pool.query(`
+      ALTER TABLE cpt_price_bounds
+        ADD COLUMN IF NOT EXISTS min_negotiated NUMERIC,
+        ADD COLUMN IF NOT EXISTS max_negotiated NUMERIC,
+        ADD COLUMN IF NOT EXISTS min_gross NUMERIC,
+        ADD COLUMN IF NOT EXISTS max_gross NUMERIC
+    `).then(() => true).catch((e) => { _ensured = null; throw e; });
+  }
+  return _ensured;
+}
+
+module.exports = { pool, readonlyPool, runReadonlySql, ensureBoundsColumns };
