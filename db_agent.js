@@ -19,8 +19,9 @@ const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
 const { assertReadOnlySelect } = require('./sql_guard');
 
-const MODEL = process.env.AGENT_MODEL || 'claude-haiku-4-5-20251001';
-const WEB_SEARCH = (process.env.AGENT_WEB_SEARCH ?? 'true') !== 'false';
+const MODEL_DEFAULT = 'claude-haiku-4-5-20251001';
+const MODEL_RESEARCH = 'claude-opus-4-8';
+const WEB_SEARCH = false; // Disabled by default (Haiku can't do tool-use). Enable only with research=true.
 
 // ── domain knowledge (what makes it "smart") ───────────────────────────────
 const SYSTEM_PROMPT = `You are Hosparent's data assistant. Hosparent is a US hospital
@@ -276,23 +277,27 @@ function getClient() {
 
 /**
  * Answer a natural-language question.
- * @returns {Promise<{answer: string, actions_taken: object[]}>}
+ * Haiku by default (cheap, DB queries only). Opus on demand for research (web_search, complex analysis).
+ * Options: { research: true } → upgrades to Opus + enables web_search.
+ * @returns {Promise<{answer: string, actions_taken: object[], model: string}>}
  */
-async function runAgent(question) {
+async function runAgent(question, options = {}) {
   const client = getClient();
   const actions = [];
+  const useResearch = options.research === true;
+  const model = useResearch ? MODEL_RESEARCH : MODEL_DEFAULT;
 
   const tools = buildClientTools(actions);
   const params = {
-    model: MODEL,
+    model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
     tools,
     messages: [{ role: 'user', content: String(question || '') }],
   };
 
-  // Group B: open web (server-side, no credentials, no extra tools of our own).
-  if (WEB_SEARCH) params.tools.push({ type: 'web_search_20260209', name: 'web_search' });
+  // Group B: open web (only for research mode, which is Opus).
+  if (useResearch) params.tools.push({ type: 'web_search_20260209', name: 'web_search' });
 
   // Group C: healthcare MCP connectors (Turquoise, PubMed, ...), if configured.
   const mcp = mcpServers();
@@ -309,7 +314,7 @@ async function runAgent(question) {
     .join('\n')
     .trim();
 
-  return { answer, actions_taken: actions };
+  return { answer, actions_taken: actions, model, research_mode: useResearch };
 }
 
 module.exports = { runAgent, diagnosePrice, SAFE_FIXES };

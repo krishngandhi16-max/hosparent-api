@@ -11,13 +11,15 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // ── AGENT ─────────────────────────────────────────────────
-// Natural-language question -> Claude tool-use agent (DB + web + healthcare MCP).
-// Returns { answer, actions_taken }. See db_agent.js.
+// Natural-language question -> Claude agent (Haiku by default, Opus on research mode).
+// Query param ?research=true switches to Opus + enables web search.
+// Returns { answer, actions_taken, model, research_mode }. See db_agent.js.
 app.post('/agent', async (req, res) => {
   const question = (req.body && req.body.question) || '';
+  const research = req.query.research === 'true';
   if (!question) return res.status(400).json({ error: 'missing "question"' });
   try {
-    const result = await runAgent(question);
+    const result = await runAgent(question, { research });
     res.json(result);
   } catch (err) {
     console.error('[/agent]', err.message);
