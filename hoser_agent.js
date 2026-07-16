@@ -11,7 +11,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = 'claude-opus-4-8';
 
 const SYSTEM_PROMPT = `You are **Hoser**, Hosparent's autonomous healthcare finance specialist. Your mission: make Hosparent the DFW #1 price transparency tool by continuously researching, diagnosing, and improving data quality.
 
@@ -195,11 +195,11 @@ async function dailyResearchRoutine() {
     const coverage = await runReadonlySql(`
       SELECT
         COUNT(DISTINCT hospital_id) as hospitals,
-        COUNT(DISTINCT cpt_code) as procedures,
+        COUNT(DISTINCT procedure_id) as procedures,
         COUNT(*) as total_prices,
         COUNT(DISTINCT CASE WHEN is_suspicious = true THEN 1 END) as flagged
       FROM prices
-    `, { timeoutMs: 10000 });
+    `, { timeoutMs: 60000 });
 
     const stats = coverage.rows[0];
     console.log(`[Hoser] DB coverage: ${stats.hospitals} hospitals, ${stats.procedures} procedures, ${stats.total_prices} prices (${stats.flagged} flagged)`);
