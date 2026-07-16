@@ -52,6 +52,7 @@
   <div class="controls">
     <button id="mic" title="Hold down to record (Web Speech API)">🎤 Hold to talk</button>
     <button id="toggleBtn" title="Switch to always-on listening">🔁 Toggle mode</button>
+    <button id="researchBtn" title="Use Opus for web search + complex research (costs more)">🔬 Research mode</button>
     <button id="stopBtn" class="danger" disabled title="Stop listening or interrupt response">⏹ Stop</button>
   </div>
 
@@ -71,10 +72,12 @@
   const qEl = document.getElementById('q');
   const micBtn = document.getElementById('mic');
   const toggleBtn = document.getElementById('toggleBtn');
+  const researchBtn = document.getElementById('researchBtn');
   const stopBtn = document.getElementById('stopBtn');
   const transcriptDisplay = document.getElementById('transcript');
 
   let toggleMode = false;
+  let researchMode = false;
   let isListening = false;
   let isSpeaking = false;
   let rec = null;
@@ -130,7 +133,8 @@
 
     const pending = add('…thinking…', 'agent');
     try {
-      const res = await fetch('/agent', {
+      const url = researchMode ? '/agent?research=true' : '/agent';
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
@@ -138,10 +142,16 @@
       const data = await res.json();
       const answer = data.answer || data.error || '(no answer)';
       pending.querySelector('.turn-text').textContent = answer;
-      if (data.actions_taken && data.actions_taken.length) {
+
+      const meta = [];
+      if (data.research_mode) meta.push('🔬 Research mode (Opus)');
+      if (data.model) meta.push(`Model: ${data.model.split('-').slice(0,2).join('-')}`);
+      if (data.actions_taken && data.actions_taken.length) meta.push('applied: ' + data.actions_taken.map(a => a.name).join(', '));
+
+      if (meta.length) {
         const m = document.createElement('div');
         m.className = 'meta';
-        m.textContent = 'applied: ' + data.actions_taken.map(a => a.name).join(', ');
+        m.textContent = meta.join(' • ');
         pending.appendChild(m);
       }
       updateTranscript(answer, 'ready');
@@ -155,6 +165,12 @@
 
   document.getElementById('send').onclick = () => { const q = qEl.value.trim(); if (q) ask(q); };
   qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); if (q) ask(q); } });
+
+  researchBtn.onclick = () => {
+    researchMode = !researchMode;
+    researchBtn.classList.toggle('active');
+    updateTranscript(researchMode ? '🔬 Research mode ON (Opus + web search)' : '🔬 Research mode OFF (Haiku)', 'ready');
+  };
 
   stopBtn.onclick = () => {
     if (isSpeaking) speechSynthesis.cancel();
