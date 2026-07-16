@@ -3,68 +3,208 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hosparent — Voice Agent</title>
+  <title>Hosparent — AI Agent</title>
   <style>
-    :root { color-scheme: light dark; }
-    body { font: 16px/1.5 system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.25rem; margin-bottom: .5rem; }
-    .subtitle { font-size: .85rem; color: #666; margin-bottom: 1.5rem; }
-
-    .controls { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-    .controls button { font-size: 1rem; padding: .7rem 1.2rem; border-radius: 8px; border: 1px solid #8888; cursor: pointer; background: #fff; }
-    .controls button:hover { background: #f5f5f5; }
-    .controls button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
-    .controls button.danger { background: #e5484d; color: #fff; border-color: #e5484d; }
-    .controls button:disabled { opacity: .5; cursor: not-allowed; }
-
-    .transcript-display {
-      background: #f5f5f5;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      padding: 1rem;
-      margin: 1rem 0;
-      min-height: 2.5rem;
-      font-style: italic;
-      color: #666;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #ffffff;
+      color: #1a202c;
+      line-height: 1.6;
     }
-    .transcript-display.listening { background: #fff5f5; border-color: #e5484d; color: #c53030; }
-    .transcript-display.thinking { background: #f0f9ff; border-color: #3b82f6; color: #1e40af; }
 
-    .row { display: flex; gap: .5rem; margin: 1rem 0; }
-    #q { flex: 1; padding: .6rem; border-radius: 8px; border: 1px solid #8888; font: inherit; }
+    .container { max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }
 
-    .log-container { margin-top: 1rem; max-height: 600px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; }
-    .turn { padding: .8rem; border-bottom: 1px solid #eee; }
-    .turn:last-child { border-bottom: none; }
-    .user { background: #f5f5f5; }
-    .agent { background: #f0f9ff; }
-    .turn-label { font-weight: 600; font-size: .85rem; text-transform: uppercase; opacity: .7; margin-bottom: .3rem; }
-    .turn-text { white-space: pre-wrap; word-break: break-word; color: #fff; }
-    .meta { font-size: .8rem; opacity: .7; margin-top: .4rem; color: #ccc; }
-    .turn.agent .turn-text { color: #000; }
-    .turn.user .turn-text { color: #000; }
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 1.5rem 0;
+      margin-bottom: 3rem;
+    }
+
+    .logo { font-size: 1.5rem; font-weight: 700; color: #1a365d; }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: #1a365d;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      font-size: 1rem;
+      color: #718096;
+      margin-bottom: 2rem;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+    }
+
+    button {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+
+    .btn-primary {
+      background: #16a34a;
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #1a202c;
+    }
+
+    .btn-secondary.active {
+      background: #3b82f6;
+      color: #fff;
+    }
+
+    .btn-danger {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    .btn-danger:disabled { opacity: 0.5; }
+
+    .transcript-box {
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+      min-height: 80px;
+      font-style: italic;
+      color: #4a5568;
+      display: flex;
+      align-items: center;
+    }
+
+    .transcript-box.listening {
+      background: #fef2f2;
+      border-color: #fee2e2;
+      color: #b91c1c;
+    }
+
+    .transcript-box.thinking {
+      background: #eff6ff;
+      border-color: #dbeafe;
+      color: #1e40af;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+
+    input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-family: inherit;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+    }
+
+    .conversation {
+      margin-top: 2rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    .message {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .message:last-child { border-bottom: none; }
+
+    .message.user {
+      background: #f7fafc;
+    }
+
+    .message.agent {
+      background: #ffffff;
+    }
+
+    .message-label {
+      font-weight: 600;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: #718096;
+      margin-bottom: 0.5rem;
+    }
+
+    .message-text {
+      color: #1a202c;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+    }
+
+    .message-meta {
+      font-size: 0.75rem;
+      color: #a0aec0;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 640px) {
+      h1 { font-size: 1.75rem; }
+      .controls { flex-direction: column; }
+      button { width: 100%; }
+      input { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <h1>🎙️ Hosparent Voice Agent</h1>
-  <p class="subtitle">Speak or type a question. Powered by Claude. <code>Hold-to-talk</code> (Web Speech API) or <code>Toggle mode</code> for continuous listening.</p>
+  <header>
+    <div class="container">
+      <div class="logo">🏥 Hosparent</div>
+    </div>
+  </header>
 
-  <div class="controls">
-    <button id="mic" title="Hold down to record (Web Speech API)">🎤 Hold to talk</button>
-    <button id="toggleBtn" title="Switch to always-on listening">🔁 Toggle mode</button>
-    <button id="researchBtn" title="Use Opus for web search + complex research (costs more)">🔬 Research mode</button>
-    <button id="stopBtn" class="danger" disabled title="Stop listening or interrupt response">⏹ Stop</button>
-  </div>
+  <div class="container">
+    <h1>Healthcare Finance AI</h1>
+    <p class="subtitle">Ask about hospital pricing, coverage, or data insights. Natural conversation, powered by Claude.</p>
 
-  <div class="transcript-display" id="transcript">Ready to listen…</div>
+    <div class="controls">
+      <button id="mic" class="btn-primary">🎤 Listen</button>
+      <button id="toggleBtn" class="btn-secondary">🔁 Always-On</button>
+      <button id="researchBtn" class="btn-secondary">🔬 Research</button>
+      <button id="stopBtn" class="btn-danger" disabled>⏹ Stop</button>
+    </div>
 
-  <div class="row">
-    <input id="q" placeholder="…or type: why aren't the drug codes showing up?" />
-    <button id="send">Ask</button>
-  </div>
+    <div class="transcript-box" id="transcript">Ready to listen…</div>
 
-  <div class="log-container">
-    <div id="log"></div>
+    <div class="input-group">
+      <input id="q" type="text" placeholder="Ask about procedures, prices, hospitals, healthcare policy…" />
+      <button id="send" class="btn-primary">Ask</button>
+    </div>
+
+    <div class="conversation" id="log"></div>
   </div>
 
 <script>
@@ -82,72 +222,38 @@
   let isSpeaking = false;
   let rec = null;
 
-  function add(text, who, meta) {
+  function add(text, who) {
     const div = document.createElement('div');
-    div.className = 'turn ' + who;
+    div.className = 'message ' + who;
 
     const label = document.createElement('div');
-    label.className = 'turn-label';
+    label.className = 'message-label';
     label.textContent = who === 'user' ? '👤 You' : '🤖 Hoser';
     div.appendChild(label);
 
     const textDiv = document.createElement('div');
-    textDiv.className = 'turn-text';
+    textDiv.className = 'message-text';
     textDiv.textContent = text;
     div.appendChild(textDiv);
 
-    if (meta) {
-      const m = document.createElement('div');
-      m.className = 'meta';
-      m.textContent = meta;
-      div.appendChild(m);
-    }
     log.prepend(div);
     return div;
   }
 
   function updateTranscript(text, state = 'ready') {
     transcriptDisplay.textContent = text || 'Ready…';
-    transcriptDisplay.className = 'transcript-display';
+    transcriptDisplay.className = 'transcript-box';
     if (state === 'listening') transcriptDisplay.classList.add('listening');
     if (state === 'thinking') transcriptDisplay.classList.add('thinking');
   }
 
-  function speak(text) {
+  function playAudio(blob) {
+    const audio = new Audio(URL.createObjectURL(blob));
     isSpeaking = true;
     stopBtn.disabled = false;
-
-    // Try ElevenLabs first (better quality), fallback to browser speech
-    fetch('/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-      .then(res => res.blob())
-      .then(blob => {
-        const audio = new Audio(URL.createObjectURL(blob));
-        audio.onended = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
-        audio.onerror = () => {
-          isSpeaking = false;
-          stopBtn.disabled = toggleMode ? false : true;
-          console.warn('ElevenLabs audio error, trying browser speech');
-          speakBrowser(text);
-        };
-        audio.play();
-      })
-      .catch(err => {
-        console.warn('ElevenLabs failed:', err.message, '— falling back to browser speech');
-        speakBrowser(text);
-      });
-  }
-
-  function speakBrowser(text) {
-    if (!('speechSynthesis' in window)) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.onend = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
-    u.onerror = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
+    audio.onended = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
+    audio.onerror = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
+    audio.play();
   }
 
   async function ask(question) {
@@ -167,30 +273,54 @@
       });
       const data = await res.json();
       const answer = data.answer || data.error || '(no answer)';
-      pending.querySelector('.turn-text').textContent = answer;
+      pending.querySelector('.message-text').textContent = answer;
 
       const meta = [];
-      if (data.research_mode) meta.push('🔬 Research mode (Opus)');
+      if (data.research_mode) meta.push('🔬 Research mode');
       if (data.model) meta.push(`Model: ${data.model.split('-').slice(0,2).join('-')}`);
-      if (data.actions_taken && data.actions_taken.length) meta.push('applied: ' + data.actions_taken.map(a => a.name).join(', '));
+      if (data.actions_taken?.length) meta.push('applied: ' + data.actions_taken.map(a => a.name).join(', '));
 
       if (meta.length) {
         const m = document.createElement('div');
-        m.className = 'meta';
+        m.className = 'message-meta';
         m.textContent = meta.join(' • ');
         pending.appendChild(m);
       }
+
       updateTranscript(answer, 'ready');
-      speak(answer);
+
+      // Play audio response
+      try {
+        const audioRes = await fetch('/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: answer }),
+        });
+        const blob = await audioRes.blob();
+        playAudio(blob);
+      } catch (e) {
+        console.warn('Audio playback failed:', e.message);
+      }
     } catch (e) {
       const msg = 'Error: ' + e.message;
-      pending.querySelector('.turn-text').textContent = msg;
+      pending.querySelector('.message-text').textContent = msg;
       updateTranscript(msg, 'ready');
     }
   }
 
   document.getElementById('send').onclick = () => { const q = qEl.value.trim(); if (q) ask(q); };
   qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); if (q) ask(q); } });
+
+  toggleBtn.onclick = () => {
+    toggleMode = !toggleMode;
+    toggleBtn.classList.toggle('active');
+    micBtn.style.opacity = toggleMode ? '0.5' : '1';
+    micBtn.disabled = toggleMode;
+    stopBtn.disabled = !toggleMode;
+    updateTranscript(toggleMode ? '🎤 Listening continuously…' : 'Ready…', 'ready');
+    if (toggleMode && rec) { try { rec.start(); isListening = true; } catch (_) {} }
+    else if (!toggleMode && rec) { try { rec.stop(); isListening = false; } catch (_) {} }
+  };
 
   researchBtn.onclick = () => {
     researchMode = !researchMode;
@@ -199,7 +329,7 @@
   };
 
   stopBtn.onclick = () => {
-    if (isSpeaking) speechSynthesis.cancel();
+    if (isSpeaking) { const audioEl = document.querySelector('audio'); if (audioEl) audioEl.pause(); }
     if (isListening && rec) rec.stop();
     isSpeaking = false;
     isListening = false;
@@ -207,22 +337,6 @@
     updateTranscript('Stopped', 'ready');
   };
 
-  toggleBtn.onclick = () => {
-    toggleMode = !toggleMode;
-    toggleBtn.classList.toggle('active');
-    micBtn.style.opacity = toggleMode ? '0.5' : '1';
-    micBtn.disabled = toggleMode;
-    stopBtn.disabled = !toggleMode;
-    updateTranscript(toggleMode ? 'Toggle mode ON (always listening)' : 'Toggle mode OFF (hold-to-talk)', 'ready');
-
-    if (toggleMode && rec) {
-      try { rec.start(); isListening = true; } catch (_) {}
-    } else if (!toggleMode && rec) {
-      try { rec.stop(); isListening = false; } catch (_) {}
-    }
-  };
-
-  // Browser speech recognition (Chrome/Edge)
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
     rec = new SR();
@@ -250,7 +364,6 @@
       const text = final || interim || 'listening…';
       updateTranscript(text, 'listening');
 
-      // Auto-send on final result (if toggle mode)
       if (toggleMode && final && e.results[e.results.length - 1].isFinal) {
         rec.stop();
         ask(final);
@@ -282,7 +395,7 @@
     micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stop(); });
   } else {
     micBtn.disabled = true;
-    micBtn.textContent = '🎤 (speech not supported in this browser)';
+    micBtn.textContent = '🎤 (speech not supported)';
     toggleBtn.disabled = true;
   }
 </script>
