@@ -3,50 +3,118 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hosparent — Voice Agent (demo)</title>
+  <title>Hosparent — Voice Agent</title>
   <style>
     :root { color-scheme: light dark; }
-    body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.25rem; }
-    #mic { font-size: 1rem; padding: .7rem 1.2rem; border-radius: 999px; border: 1px solid #8888; cursor: pointer; }
-    #mic.listening { background: #e5484d; color: #fff; border-color: #e5484d; }
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; margin-bottom: .5rem; }
+    .subtitle { font-size: .85rem; color: #666; margin-bottom: 1.5rem; }
+
+    .controls { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .controls button { font-size: 1rem; padding: .7rem 1.2rem; border-radius: 8px; border: 1px solid #8888; cursor: pointer; background: #fff; }
+    .controls button:hover { background: #f5f5f5; }
+    .controls button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .controls button.danger { background: #e5484d; color: #fff; border-color: #e5484d; }
+    .controls button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .transcript-display {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 1rem 0;
+      min-height: 2.5rem;
+      font-style: italic;
+      color: #666;
+    }
+    .transcript-display.listening { background: #fff5f5; border-color: #e5484d; color: #c53030; }
+    .transcript-display.thinking { background: #f0f9ff; border-color: #3b82f6; color: #1e40af; }
+
     .row { display: flex; gap: .5rem; margin: 1rem 0; }
     #q { flex: 1; padding: .6rem; border-radius: 8px; border: 1px solid #8888; font: inherit; }
-    #log { margin-top: 1rem; }
-    .turn { padding: .6rem .8rem; border-radius: 10px; margin: .5rem 0; white-space: pre-wrap; }
-    .user { background: #8882; }
-    .agent { background: #3b82f622; }
-    .meta { font-size: .8rem; opacity: .7; }
+
+    .log-container { margin-top: 1rem; max-height: 600px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; }
+    .turn { padding: .8rem; border-bottom: 1px solid #eee; }
+    .turn:last-child { border-bottom: none; }
+    .user { background: #f5f5f5; }
+    .agent { background: #f0f9ff; }
+    .turn-label { font-weight: 600; font-size: .85rem; text-transform: uppercase; opacity: .7; margin-bottom: .3rem; }
+    .turn-text { white-space: pre-wrap; word-break: break-word; }
+    .meta { font-size: .8rem; opacity: .6; margin-top: .4rem; }
   </style>
 </head>
 <body>
-  <h1>🎙️ Hosparent Voice Agent <span class="meta">(browser demo — zero backend voice cost)</span></h1>
-  <p class="meta">Speak or type a question. Uses your browser's speech recognition + synthesis and the <code>/agent</code> endpoint. Upgrade to Azure AI Speech (<code>/voice</code>) for production quality.</p>
+  <h1>🎙️ Hosparent Voice Agent</h1>
+  <p class="subtitle">Speak or type a question. Powered by Claude. <code>Hold-to-talk</code> (Web Speech API) or <code>Toggle mode</code> for continuous listening.</p>
 
-  <button id="mic">🎤 Hold to talk</button>
+  <div class="controls">
+    <button id="mic" title="Hold down to record (Web Speech API)">🎤 Hold to talk</button>
+    <button id="toggleBtn" title="Switch to always-on listening">🔁 Toggle mode</button>
+    <button id="stopBtn" class="danger" disabled title="Stop listening or interrupt response">⏹ Stop</button>
+  </div>
+
+  <div class="transcript-display" id="transcript">Ready to listen…</div>
+
   <div class="row">
     <input id="q" placeholder="…or type: why aren't the drug codes showing up?" />
     <button id="send">Ask</button>
   </div>
-  <div id="log"></div>
+
+  <div class="log-container">
+    <div id="log"></div>
+  </div>
 
 <script>
   const log = document.getElementById('log');
   const qEl = document.getElementById('q');
   const micBtn = document.getElementById('mic');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const transcriptDisplay = document.getElementById('transcript');
+
+  let toggleMode = false;
+  let isListening = false;
+  let isSpeaking = false;
+  let rec = null;
 
   function add(text, who, meta) {
     const div = document.createElement('div');
     div.className = 'turn ' + who;
-    div.textContent = text;
-    if (meta) { const m = document.createElement('div'); m.className = 'meta'; m.textContent = meta; div.appendChild(m); }
+
+    const label = document.createElement('div');
+    label.className = 'turn-label';
+    label.textContent = who === 'user' ? '👤 You' : '🤖 Hoser';
+    div.appendChild(label);
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'turn-text';
+    textDiv.textContent = text;
+    div.appendChild(textDiv);
+
+    if (meta) {
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = meta;
+      div.appendChild(m);
+    }
     log.prepend(div);
     return div;
   }
 
+  function updateTranscript(text, state = 'ready') {
+    transcriptDisplay.textContent = text || 'Ready…';
+    transcriptDisplay.className = 'transcript-display';
+    if (state === 'listening') transcriptDisplay.classList.add('listening');
+    if (state === 'thinking') transcriptDisplay.classList.add('thinking');
+  }
+
   function speak(text) {
     if (!('speechSynthesis' in window)) return;
+    isSpeaking = true;
+    stopBtn.disabled = false;
     const u = new SpeechSynthesisUtterance(text);
+    u.onend = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
+    u.onerror = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   }
@@ -54,6 +122,10 @@
   async function ask(question) {
     if (!question) return;
     add(question, 'user');
+    qEl.value = '';
+    updateTranscript('Thinking…', 'thinking');
+    stopBtn.disabled = false;
+
     const pending = add('…thinking…', 'agent');
     try {
       const res = await fetch('/agent', {
@@ -63,33 +135,103 @@
       });
       const data = await res.json();
       const answer = data.answer || data.error || '(no answer)';
-      pending.textContent = answer;
-      pending.className = 'turn agent';
+      pending.querySelector('.turn-text').textContent = answer;
       if (data.actions_taken && data.actions_taken.length) {
         const m = document.createElement('div');
         m.className = 'meta';
         m.textContent = 'applied: ' + data.actions_taken.map(a => a.name).join(', ');
         pending.appendChild(m);
       }
+      updateTranscript(answer, 'ready');
       speak(answer);
     } catch (e) {
-      pending.textContent = 'Error: ' + e.message;
+      const msg = 'Error: ' + e.message;
+      pending.querySelector('.turn-text').textContent = msg;
+      updateTranscript(msg, 'ready');
     }
   }
 
-  document.getElementById('send').onclick = () => { const q = qEl.value.trim(); qEl.value = ''; ask(q); };
-  qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); qEl.value = ''; ask(q); } });
+  document.getElementById('send').onclick = () => { const q = qEl.value.trim(); if (q) ask(q); };
+  qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); if (q) ask(q); } });
 
-  // Browser speech recognition (Chrome/Edge). Hold the button, speak, release.
+  stopBtn.onclick = () => {
+    if (isSpeaking) speechSynthesis.cancel();
+    if (isListening && rec) rec.stop();
+    isSpeaking = false;
+    isListening = false;
+    stopBtn.disabled = true;
+    updateTranscript('Stopped', 'ready');
+  };
+
+  toggleBtn.onclick = () => {
+    toggleMode = !toggleMode;
+    toggleBtn.classList.toggle('active');
+    micBtn.style.opacity = toggleMode ? '0.5' : '1';
+    micBtn.disabled = toggleMode;
+    stopBtn.disabled = !toggleMode;
+    updateTranscript(toggleMode ? 'Toggle mode ON (always listening)' : 'Toggle mode OFF (hold-to-talk)', 'ready');
+
+    if (toggleMode && rec) {
+      try { rec.start(); isListening = true; } catch (_) {}
+    } else if (!toggleMode && rec) {
+      try { rec.stop(); isListening = false; } catch (_) {}
+    }
+  };
+
+  // Browser speech recognition (Chrome/Edge)
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
-    const rec = new SR();
+    rec = new SR();
     rec.lang = 'en-US';
-    rec.interimResults = false;
-    rec.onresult = (e) => ask(e.results[0][0].transcript);
-    rec.onend = () => micBtn.classList.remove('listening');
-    const start = () => { try { rec.start(); micBtn.classList.add('listening'); } catch (_) {} };
+    rec.interimResults = true;
+    rec.continuous = true;
+
+    rec.onstart = () => {
+      isListening = true;
+      updateTranscript('Listening…', 'listening');
+      stopBtn.disabled = false;
+    };
+
+    rec.onresult = (e) => {
+      let interim = '';
+      let final = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          final += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      const text = final || interim || 'listening…';
+      updateTranscript(text, 'listening');
+
+      // Auto-send on final result (if toggle mode)
+      if (toggleMode && final && e.results[e.results.length - 1].isFinal) {
+        rec.stop();
+        ask(final);
+      }
+    };
+
+    rec.onerror = (e) => {
+      updateTranscript('Error: ' + e.error, 'ready');
+      isListening = false;
+      stopBtn.disabled = toggleMode ? false : true;
+    };
+
+    rec.onend = () => {
+      isListening = false;
+      if (toggleMode) {
+        try { rec.start(); } catch (_) {}
+      } else {
+        updateTranscript('Ready…', 'ready');
+        stopBtn.disabled = true;
+      }
+    };
+
+    const start = () => { try { rec.start(); } catch (_) {} };
     const stop = () => { try { rec.stop(); } catch (_) {} };
+
     micBtn.addEventListener('mousedown', start);
     micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); start(); });
     micBtn.addEventListener('mouseup', stop);
@@ -97,6 +239,7 @@
   } else {
     micBtn.disabled = true;
     micBtn.textContent = '🎤 (speech not supported in this browser)';
+    toggleBtn.disabled = true;
   }
 </script>
 </body>

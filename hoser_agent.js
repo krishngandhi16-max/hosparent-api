@@ -11,7 +11,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const MODEL = 'claude-opus-4-8';
+const MODEL = 'claude-haiku-4-5-20251001';
 
 const SYSTEM_PROMPT = `You are **Hoser**, Hosparent's autonomous healthcare finance specialist. Your mission: make Hosparent the DFW #1 price transparency tool by continuously researching, diagnosing, and improving data quality.
 

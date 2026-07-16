@@ -19,7 +19,7 @@ const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
 const { assertReadOnlySelect } = require('./sql_guard');
 
-const MODEL = process.env.AGENT_MODEL || 'claude-opus-4-8';
+const MODEL = process.env.AGENT_MODEL || 'claude-haiku-4-5-20251001';
 const WEB_SEARCH = (process.env.AGENT_WEB_SEARCH ?? 'true') !== 'false';
 
 // ── domain knowledge (what makes it "smart") ───────────────────────────────
