@@ -227,7 +227,7 @@ async function healthCheckRoutine() {
         (SELECT COUNT(DISTINCT hospital_id) FROM prices) as hospital_count,
         (SELECT COUNT(DISTINCT procedure_id) FROM prices) as procedure_count,
         (SELECT COUNT(DISTINCT cpt_code) FROM cpt_price_bounds) as bounds_count
-    `);
+    `, { timeoutMs: 15000 });
 
     console.log(`[Hoser] Health status:`, result.rows[0]);
     return result.rows[0];

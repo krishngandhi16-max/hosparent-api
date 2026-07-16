@@ -286,7 +286,6 @@ async function runAgent(question) {
   const params = {
     model: MODEL,
     max_tokens: 4096,
-    thinking: { type: 'adaptive' },
     system: SYSTEM_PROMPT,
     tools,
     messages: [{ role: 'user', content: String(question || '') }],
