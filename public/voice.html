@@ -3,106 +3,131 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hosparent — AI Agent</title>
+  <title>Hosparent — Voice AI</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: #ffffff;
-      color: #1a202c;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a365d 0%, #2d5a8c 100%);
+      color: #fff;
       line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
-    .container { max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }
-
-    header {
-      background: #ffffff;
-      border-bottom: 1px solid #e2e8f0;
-      padding: 1.5rem 0;
-      margin-bottom: 3rem;
+    .container {
+      max-width: 600px;
+      background: #fff;
+      border-radius: 20px;
+      padding: 3rem 2rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      color: #1a202c;
     }
-
-    .logo { font-size: 1.5rem; font-weight: 700; color: #1a365d; }
 
     h1 {
-      font-size: 2.5rem;
+      font-size: 2rem;
       font-weight: 700;
       color: #1a365d;
       margin-bottom: 0.5rem;
-      letter-spacing: -0.02em;
+      text-align: center;
     }
 
     .subtitle {
-      font-size: 1rem;
+      font-size: 0.95rem;
       color: #718096;
+      text-align: center;
       margin-bottom: 2rem;
     }
 
     .controls {
       display: flex;
       gap: 1rem;
-      flex-wrap: wrap;
+      justify-content: center;
       margin-bottom: 2rem;
+      flex-wrap: wrap;
     }
 
     button {
-      padding: 0.75rem 1.5rem;
-      border-radius: 8px;
+      padding: 1rem 2rem;
+      border-radius: 12px;
       border: none;
-      font-size: 1rem;
-      font-weight: 500;
+      font-size: 1.1rem;
+      font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
+      min-width: 140px;
     }
 
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
 
-    .btn-primary {
+    button:hover:not(:disabled) {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+    }
+
+    .btn-start {
       background: #16a34a;
       color: #fff;
     }
 
-    .btn-secondary {
-      background: #e2e8f0;
-      color: #1a202c;
+    .btn-start:hover:not(:disabled) {
+      background: #15803d;
     }
 
-    .btn-secondary.active {
-      background: #3b82f6;
-      color: #fff;
-    }
-
-    .btn-danger {
+    .btn-finish {
       background: #ef4444;
       color: #fff;
     }
 
-    .btn-danger:disabled { opacity: 0.5; }
+    .btn-finish:hover:not(:disabled) {
+      background: #dc2626;
+    }
+
+    .btn-research {
+      background: #e2e8f0;
+      color: #1a202c;
+    }
+
+    .btn-research.active {
+      background: #3b82f6;
+      color: #fff;
+    }
 
     .transcript-box {
       background: #f7fafc;
-      border: 1px solid #e2e8f0;
+      border: 2px solid #e2e8f0;
       border-radius: 12px;
       padding: 1.5rem;
       margin: 2rem 0;
-      min-height: 80px;
-      font-style: italic;
+      min-height: 100px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 1.05rem;
       color: #4a5568;
-      display: flex;
-      align-items: center;
+      line-height: 1.7;
     }
 
     .transcript-box.listening {
       background: #fef2f2;
-      border-color: #fee2e2;
+      border-color: #fca5a5;
       color: #b91c1c;
+      animation: pulse 1s infinite;
     }
 
     .transcript-box.thinking {
       background: #eff6ff;
-      border-color: #dbeafe;
+      border-color: #bfdbfe;
       color: #1e40af;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
     }
 
     .input-group {
@@ -114,10 +139,9 @@
     input {
       flex: 1;
       padding: 0.75rem 1rem;
-      border: 1px solid #e2e8f0;
+      border: 2px solid #e2e8f0;
       border-radius: 8px;
       font-size: 1rem;
-      font-family: inherit;
     }
 
     input:focus {
@@ -126,12 +150,26 @@
       box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
     }
 
+    .send-btn {
+      padding: 0.75rem 1.5rem;
+      background: #16a34a;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: #15803d;
+    }
+
     .conversation {
       margin-top: 2rem;
-      border: 1px solid #e2e8f0;
+      border: 2px solid #e2e8f0;
       border-radius: 12px;
       overflow: hidden;
-      max-height: 500px;
+      max-height: 400px;
       overflow-y: auto;
     }
 
@@ -143,11 +181,11 @@
     .message:last-child { border-bottom: none; }
 
     .message.user {
-      background: #f7fafc;
+      background: #f0fdf4;
     }
 
     .message.agent {
-      background: #ffffff;
+      background: #fffbeb;
     }
 
     .message-label {
@@ -160,67 +198,78 @@
 
     .message-text {
       color: #1a202c;
-      white-space: pre-wrap;
-      word-break: break-word;
       line-height: 1.6;
     }
 
-    .message-meta {
-      font-size: 0.75rem;
-      color: #a0aec0;
-      margin-top: 0.5rem;
+    .status {
+      text-align: center;
+      font-size: 0.9rem;
+      color: #718096;
+      margin: 1rem 0;
+    }
+
+    .status.active {
+      color: #16a34a;
+      font-weight: 600;
     }
 
     @media (max-width: 640px) {
-      h1 { font-size: 1.75rem; }
-      .controls { flex-direction: column; }
-      button { width: 100%; }
-      input { width: 100%; }
+      .container { padding: 2rem 1rem; }
+      h1 { font-size: 1.5rem; }
+      button { min-width: 100px; padding: 0.75rem 1rem; font-size: 1rem; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="container">
-      <div class="logo">🏥 Hosparent</div>
-    </div>
-  </header>
-
   <div class="container">
-    <h1>Healthcare Finance AI</h1>
-    <p class="subtitle">Ask about hospital pricing, coverage, or data insights. Natural conversation, powered by Claude.</p>
+    <h1>🎤 Hosparent Voice</h1>
+    <p class="subtitle">Ask about hospital pricing, costs, and healthcare finance</p>
 
     <div class="controls">
-      <button id="mic" class="btn-primary">🎤 Listen</button>
-      <button id="toggleBtn" class="btn-secondary">🔁 Always-On</button>
-      <button id="researchBtn" class="btn-secondary">🔬 Research</button>
-      <button id="stopBtn" class="btn-danger" disabled>⏹ Stop</button>
+      <button id="startBtn" class="btn-start">▶ START</button>
+      <button id="finishBtn" class="btn-finish" disabled>⏹ FINISH</button>
+      <button id="researchBtn" class="btn-research">🔬 Research</button>
     </div>
 
-    <div class="transcript-box" id="transcript">Ready to listen…</div>
+    <div class="status" id="status">Ready to listen</div>
+
+    <div class="transcript-box" id="transcript">Click START to begin speaking…</div>
 
     <div class="input-group">
-      <input id="q" type="text" placeholder="Ask about procedures, prices, hospitals, healthcare policy…" />
-      <button id="send" class="btn-primary">Ask</button>
+      <input id="q" type="text" placeholder="Or type a question here…" />
+      <button id="send" class="send-btn">Ask</button>
     </div>
 
     <div class="conversation" id="log"></div>
   </div>
 
 <script>
-  const log = document.getElementById('log');
-  const qEl = document.getElementById('q');
-  const micBtn = document.getElementById('mic');
-  const toggleBtn = document.getElementById('toggleBtn');
+  const startBtn = document.getElementById('startBtn');
+  const finishBtn = document.getElementById('finishBtn');
   const researchBtn = document.getElementById('researchBtn');
-  const stopBtn = document.getElementById('stopBtn');
+  const qEl = document.getElementById('q');
+  const sendBtn = document.getElementById('send');
   const transcriptDisplay = document.getElementById('transcript');
+  const statusDisplay = document.getElementById('status');
+  const log = document.getElementById('log');
 
-  let toggleMode = false;
-  let researchMode = false;
-  let isListening = false;
-  let isSpeaking = false;
   let rec = null;
+  let isRecording = false;
+  let recordedText = '';
+  let researchMode = false;
+  let isSpeaking = false;
+
+  function updateStatus(text, isActive = false) {
+    statusDisplay.textContent = text;
+    statusDisplay.className = isActive ? 'status active' : 'status';
+  }
+
+  function updateTranscript(text, state = 'ready') {
+    transcriptDisplay.textContent = text || 'Ready…';
+    transcriptDisplay.className = 'transcript-box';
+    if (state === 'listening') transcriptDisplay.classList.add('listening');
+    if (state === 'thinking') transcriptDisplay.classList.add('thinking');
+  }
 
   function add(text, who) {
     const div = document.createElement('div');
@@ -237,22 +286,13 @@
     div.appendChild(textDiv);
 
     log.prepend(div);
-    return div;
-  }
-
-  function updateTranscript(text, state = 'ready') {
-    transcriptDisplay.textContent = text || 'Ready…';
-    transcriptDisplay.className = 'transcript-box';
-    if (state === 'listening') transcriptDisplay.classList.add('listening');
-    if (state === 'thinking') transcriptDisplay.classList.add('thinking');
   }
 
   function playAudio(blob) {
     const audio = new Audio(URL.createObjectURL(blob));
     isSpeaking = true;
-    stopBtn.disabled = false;
-    audio.onended = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
-    audio.onerror = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
+    audio.onended = () => { isSpeaking = false; };
+    audio.onerror = () => { isSpeaking = false; };
     audio.play();
   }
 
@@ -261,9 +301,8 @@
     add(question, 'user');
     qEl.value = '';
     updateTranscript('Thinking…', 'thinking');
-    stopBtn.disabled = false;
+    updateStatus('Processing…', true);
 
-    const pending = add('…thinking…', 'agent');
     try {
       const url = researchMode ? '/agent?research=true' : '/agent';
       const res = await fetch(url, {
@@ -273,21 +312,9 @@
       });
       const data = await res.json();
       const answer = data.answer || data.error || '(no answer)';
-      pending.querySelector('.message-text').textContent = answer;
-
-      const meta = [];
-      if (data.research_mode) meta.push('🔬 Research mode');
-      if (data.model) meta.push(`Model: ${data.model.split('-').slice(0,2).join('-')}`);
-      if (data.actions_taken?.length) meta.push('applied: ' + data.actions_taken.map(a => a.name).join(', '));
-
-      if (meta.length) {
-        const m = document.createElement('div');
-        m.className = 'message-meta';
-        m.textContent = meta.join(' • ');
-        pending.appendChild(m);
-      }
-
+      add(answer, 'agent');
       updateTranscript(answer, 'ready');
+      updateStatus('✓ Done', true);
 
       // Play audio response
       try {
@@ -299,43 +326,33 @@
         const blob = await audioRes.blob();
         playAudio(blob);
       } catch (e) {
-        console.warn('Audio playback failed:', e.message);
+        console.warn('Audio failed:', e.message);
       }
     } catch (e) {
       const msg = 'Error: ' + e.message;
-      pending.querySelector('.message-text').textContent = msg;
+      add(msg, 'agent');
       updateTranscript(msg, 'ready');
+      updateStatus('Error', false);
     }
   }
-
-  document.getElementById('send').onclick = () => { const q = qEl.value.trim(); if (q) ask(q); };
-  qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const q = qEl.value.trim(); if (q) ask(q); } });
-
-  toggleBtn.onclick = () => {
-    toggleMode = !toggleMode;
-    toggleBtn.classList.toggle('active');
-    micBtn.style.opacity = toggleMode ? '0.5' : '1';
-    micBtn.disabled = toggleMode;
-    stopBtn.disabled = !toggleMode;
-    updateTranscript(toggleMode ? '🎤 Listening continuously…' : 'Ready…', 'ready');
-    if (toggleMode && rec) { try { rec.start(); isListening = true; } catch (_) {} }
-    else if (!toggleMode && rec) { try { rec.stop(); isListening = false; } catch (_) {} }
-  };
 
   researchBtn.onclick = () => {
     researchMode = !researchMode;
     researchBtn.classList.toggle('active');
-    updateTranscript(researchMode ? '🔬 Research mode ON (Opus + web search)' : '🔬 Research mode OFF (Haiku)', 'ready');
+    updateStatus(researchMode ? '🔬 Research Mode ON (Opus)' : '🔬 Research Mode OFF (Haiku)', researchMode);
   };
 
-  stopBtn.onclick = () => {
-    if (isSpeaking) { const audioEl = document.querySelector('audio'); if (audioEl) audioEl.pause(); }
-    if (isListening && rec) rec.stop();
-    isSpeaking = false;
-    isListening = false;
-    stopBtn.disabled = true;
-    updateTranscript('Stopped', 'ready');
+  sendBtn.onclick = () => {
+    const q = qEl.value.trim();
+    if (q) ask(q);
   };
+
+  qEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const q = qEl.value.trim();
+      if (q) ask(q);
+    }
+  });
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
@@ -345,9 +362,12 @@
     rec.continuous = true;
 
     rec.onstart = () => {
-      isListening = true;
-      updateTranscript('Listening…', 'listening');
-      stopBtn.disabled = false;
+      isRecording = true;
+      recordedText = '';
+      updateStatus('Listening…', true);
+      updateTranscript('Listening… speak now', 'listening');
+      finishBtn.disabled = false;
+      startBtn.disabled = true;
     };
 
     rec.onresult = (e) => {
@@ -356,49 +376,48 @@
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const transcript = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
-          final += transcript;
+          final += transcript + ' ';
         } else {
           interim += transcript;
         }
       }
-      const text = final || interim || 'listening…';
-      updateTranscript(text, 'listening');
-
-      if (toggleMode && final && e.results[e.results.length - 1].isFinal) {
-        rec.stop();
-        ask(final);
-      }
+      recordedText = final || interim;
+      updateTranscript(recordedText || 'listening…', 'listening');
     };
 
     rec.onerror = (e) => {
+      updateStatus('Error: ' + e.error, false);
       updateTranscript('Error: ' + e.error, 'ready');
-      isListening = false;
-      stopBtn.disabled = toggleMode ? false : true;
+      isRecording = false;
+      finishBtn.disabled = true;
+      startBtn.disabled = false;
     };
 
     rec.onend = () => {
-      isListening = false;
-      if (toggleMode) {
-        try { rec.start(); } catch (_) {}
-      } else {
-        updateTranscript('Ready…', 'ready');
-        stopBtn.disabled = true;
-      }
+      isRecording = false;
+      finishBtn.disabled = true;
+      startBtn.disabled = false;
     };
 
-    const start = () => { try { rec.start(); } catch (_) {} };
-    const stop = () => { try { rec.stop(); } catch (_) {} };
+    startBtn.onclick = () => {
+      recordedText = '';
+      try { rec.start(); } catch (e) { console.error(e); }
+    };
 
-    micBtn.addEventListener('mousedown', start);
-    micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); start(); });
-    micBtn.addEventListener('mouseup', stop);
-    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stop(); });
+    finishBtn.onclick = () => {
+      try { rec.stop(); } catch (e) { console.error(e); }
+      if (recordedText.trim()) {
+        ask(recordedText.trim());
+      } else {
+        updateStatus('No speech detected', false);
+        updateTranscript('No speech detected. Try again.', 'ready');
+      }
+    };
   } else {
-    micBtn.disabled = true;
-    micBtn.textContent = '🎤 (speech not supported)';
-    toggleBtn.disabled = true;
+    startBtn.disabled = true;
+    startBtn.textContent = '🎤 (not supported)';
+    updateStatus('Speech recognition not supported', false);
   }
 </script>
 </body>
 </html>
-
