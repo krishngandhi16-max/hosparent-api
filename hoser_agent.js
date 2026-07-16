@@ -224,9 +224,9 @@ async function healthCheckRoutine() {
     const result = await runReadonlySql(`
       SELECT
         (SELECT COUNT(*) FROM prices WHERE is_suspicious = true) as flagged_prices,
-        (SELECT COUNT(*) FROM prices WHERE created_at < NOW() - INTERVAL '30 days') as stale_prices,
         (SELECT COUNT(DISTINCT hospital_id) FROM prices) as hospital_count,
-        (SELECT COUNT(DISTINCT procedure_id) FROM prices) as procedure_count
+        (SELECT COUNT(DISTINCT procedure_id) FROM prices) as procedure_count,
+        (SELECT COUNT(DISTINCT cpt_code) FROM cpt_price_bounds) as bounds_count
     `);
 
     console.log(`[Hoser] Health status:`, result.rows[0]);
