@@ -921,6 +921,20 @@ app.get('/verify-all', async (req, res) => {
 
 app.get('/cache-clear', (req, res) => { cache.clear(); res.json({ cleared: true }); });
 
+// ── HOSER (Autonomous Healthcare Finance Specialist) ─────
+app.post('/hoser', async (req, res) => {
+  const question = (req.body && req.body.question) || '';
+  if (!question) return res.status(400).json({ error: 'missing "question" for Hoser' });
+  try {
+    const { hoserResearch } = require('./hoser_agent');
+    const result = await hoserResearch(question);
+    res.json(result);
+  } catch (err) {
+    console.error('[/hoser]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── HEALTH ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({
   status: 'ok',
@@ -931,4 +945,15 @@ app.get('/health', (req, res) => res.json({
 }));
 
 const PORT = 3001;
-app.listen(PORT, () => console.log(`Hosparent API v3.2 on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Hosparent API v3.2 on http://localhost:${PORT}`);
+  console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded (per-type)`);
+
+  // Start Hoser monitoring
+  try {
+    require('./hoser_monitor');
+    console.log(`[hoser] Autonomous specialist initialized`);
+  } catch (e) {
+    console.error(`[hoser] Failed to initialize:`, e.message);
+  }
+});
