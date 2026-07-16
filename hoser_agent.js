@@ -212,25 +212,37 @@ async function dailyResearchRoutine() {
       recentResearch = lines.map(l => l.split(',"')[0]).filter(Boolean);
     }
 
-    // 3. Dynamically choose research based on coverage gaps
+    // 3. Dynamically choose research based on coverage gaps (EMPLOYER MODEL)
     const topics = [
-      // Data quality topics
-      `Our database has ${stats.hospitals} DFW hospitals and ${stats.procedures} procedures with ${stats.total_prices} prices. We have ${stats.flagged} flagged prices. What are the top 3 data quality improvements we should prioritize?`,
+      // Insurance loopholes & denial reasons
+      'What are the top 5 insurance denial reasons in Texas? How can employees appeal denied claims?',
 
-      // Coverage gaps
-      'Which major DFW hospitals (Baylor, Methodist, Texas Health, UT Southwestern) have the most incomplete MRF data? Which procedures are missing?',
+      // Worst-case pricing scenarios
+      'For a standard colonoscopy, what are ALL hidden costs? (facility fees, anesthesia, pathology, coding)',
 
-      // Regulatory/legal topics (your request)
-      'What are the latest Texas state laws on hospital price transparency? Are there any regulatory loopholes or exemptions that apply to HOPD/ASC pricing disclosure?',
+      // Real employee stories (#1 priority)
+      'Find 3-5 Reddit/news stories of employees overcharged for procedures. Extract: procedure, hospital, charged vs fair price, what they learned',
 
-      // Competitive intelligence
-      'How do TryBilly, Turquoise Health, and other competitors source their DFW pricing data? What are their coverage gaps vs ours?',
+      // DFW market intelligence
+      'Which DFW hospitals are most expensive for common procedures? Which are cheapest? Include Baylor, Methodist, Texas Health, UT Southwestern, Medical City',
 
-      // Healthcare finance topics
-      'Explain bundled payments and DRGs in healthcare finance. How do they affect HOPD pricing transparency in Texas?',
+      // Regulatory compliance
+      'What Texas laws require hospitals to give price quotes upfront? Are they being followed? What happens if they do not comply?',
 
-      // Novitas/payer topics
-      'What are Novitas LCD (Local Coverage Determinations) for common DFW procedures? How do they influence actual reimbursement rates?',
+      // Education for employees (plain language)
+      'Explain in simple terms for employees: deductible, out-of-pocket max, in-network vs out-of-network, co-insurance, how insurance denials work',
+
+      // Billing modifiers & how they affect costs
+      'What are the most common billing code modifiers (26, TC, PC)? How do they affect the final price employees pay?',
+
+      // Medicare Advantage vs Traditional
+      'How does Medicare Advantage differ from traditional Medicare? Which is cheaper for common procedures in DFW?',
+
+      // Employer cost-saving strategies
+      'What strategies do large employers use to reduce healthcare costs? Which ones actually work and save money?',
+
+      // Payer network analysis
+      'Which insurance plans (BCBS, UHC, Aetna, Cigna) have the largest provider networks in DFW? Which have cheapest rates for common procedures?',
     ];
 
     // Pick a topic we haven't researched recently
