@@ -186,34 +186,77 @@ Research findings, patterns, and recommendations for Hosparent improvement.
   return vaultRoot;
 }
 
-// Daily research routine
+// Daily research routine - smart about what to research
 async function dailyResearchRoutine() {
   console.log(`\n[Hoser] Starting daily research cycle...`);
 
-  const topics = [
-    'What are the key differences between HOPD and ASC pricing in Texas? How do Novitas rates influence Hosparent\'s DFW data?',
-    'Which DFW hospitals have recently updated their MRFs? Are there gaps in our current coverage?',
-    'What are the top 5 most expensive procedures in the DFW HOPD market, and how do our prices compare to TryBilly?',
-  ];
+  try {
+    // 1. Check database coverage first
+    const coverage = await runReadonlySql(`
+      SELECT
+        COUNT(DISTINCT hospital_id) as hospitals,
+        COUNT(DISTINCT cpt_code) as procedures,
+        COUNT(*) as total_prices,
+        COUNT(DISTINCT CASE WHEN is_suspicious = true THEN 1 END) as flagged
+      FROM prices
+    `, { timeoutMs: 10000 });
 
-  const topic = topics[Math.floor(Math.random() * topics.length)];
-  console.log(`[Hoser] Researching: ${topic}`);
+    const stats = coverage.rows[0];
+    console.log(`[Hoser] DB coverage: ${stats.hospitals} hospitals, ${stats.procedures} procedures, ${stats.total_prices} prices (${stats.flagged} flagged)`);
 
-  const result = await hoserResearch(topic);
+    // 2. Check what we've already researched
+    const findingsLog = path.join(__dirname, 'hoser-knowledge/findings/daily_log.csv');
+    let recentResearch = [];
+    if (fs.existsSync(findingsLog)) {
+      const lines = fs.readFileSync(findingsLog, 'utf8').split('\n').slice(-10);
+      recentResearch = lines.map(l => l.split(',"')[0]).filter(Boolean);
+    }
 
-  // Auto-append to findings log
-  const findingsLog = path.join(__dirname, 'hoser-knowledge/findings/daily_log.csv');
-  const timestamp = new Date().toISOString();
-  const entry = `${timestamp},"${topic}","${(result.answer || '').slice(0, 100)}..."\n`;
+    // 3. Dynamically choose research based on coverage gaps
+    const topics = [
+      // Data quality topics
+      `Our database has ${stats.hospitals} DFW hospitals and ${stats.procedures} procedures with ${stats.total_prices} prices. We have ${stats.flagged} flagged prices. What are the top 3 data quality improvements we should prioritize?`,
 
-  if (!fs.existsSync(path.dirname(findingsLog))) {
-    fs.mkdirSync(path.dirname(findingsLog), { recursive: true });
+      // Coverage gaps
+      'Which major DFW hospitals (Baylor, Methodist, Texas Health, UT Southwestern) have the most incomplete MRF data? Which procedures are missing?',
+
+      // Regulatory/legal topics (your request)
+      'What are the latest Texas state laws on hospital price transparency? Are there any regulatory loopholes or exemptions that apply to HOPD/ASC pricing disclosure?',
+
+      // Competitive intelligence
+      'How do TryBilly, Turquoise Health, and other competitors source their DFW pricing data? What are their coverage gaps vs ours?',
+
+      // Healthcare finance topics
+      'Explain bundled payments and DRGs in healthcare finance. How do they affect HOPD pricing transparency in Texas?',
+
+      // Novitas/payer topics
+      'What are Novitas LCD (Local Coverage Determinations) for common DFW procedures? How do they influence actual reimbursement rates?',
+    ];
+
+    // Pick a topic we haven't researched recently
+    const topic = topics.find(t => !recentResearch.some(r => r.includes(t.substring(0, 50))))
+      || topics[Math.floor(Math.random() * topics.length)];
+
+    console.log(`[Hoser] Researching: ${topic.substring(0, 80)}...`);
+
+    const result = await hoserResearch(topic);
+
+    // Log with topic + answer
+    if (!fs.existsSync(path.dirname(findingsLog))) {
+      fs.mkdirSync(path.dirname(findingsLog), { recursive: true });
+    }
+
+    const timestamp = new Date().toISOString();
+    const answer = (result.answer || '').slice(0, 200).replace(/"/g, "'");
+    const entry = `${timestamp},"${topic.substring(0, 100)}","${answer}..."\n`;
+    fs.appendFileSync(findingsLog, entry, 'utf8');
+    console.log(`[Hoser] Findings logged`);
+
+    return result;
+  } catch (e) {
+    console.error(`[Hoser] Research cycle failed:`, e.message);
+    return { error: e.message };
   }
-
-  fs.appendFileSync(findingsLog, entry, 'utf8');
-  console.log(`[Hoser] Findings logged to ${findingsLog}`);
-
-  return result;
 }
 
 // Health check routine
