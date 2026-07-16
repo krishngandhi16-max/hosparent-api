@@ -954,6 +954,154 @@ app.post('/hoser', async (req, res) => {
   }
 });
 
+// ── HOSER KNOWLEDGE BASE ──────────────────────────────
+// Web interface to browse Hoser's autonomous research findings
+app.get('/hoser', async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const vaultRoot = path.join(__dirname, 'hoser-knowledge');
+
+    if (!fs.existsSync(vaultRoot)) {
+      return res.send('<h1>Hoser Knowledge Base</h1><p>Vault not initialized yet. Run Hoser to generate findings.</p>');
+    }
+
+    // Read daily log (research findings)
+    const dailyLog = path.join(vaultRoot, 'findings', 'daily_log.csv');
+    let logEntries = [];
+    if (fs.existsSync(dailyLog)) {
+      const csv = fs.readFileSync(dailyLog, 'utf8');
+      logEntries = csv.split('\n').filter(l => l.trim()).slice(-20); // Last 20 entries
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hoser Knowledge Base</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f7fafc;
+      color: #1a202c;
+      line-height: 1.6;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+    header {
+      background: linear-gradient(135deg, #1a365d 0%, #2d5a8c 100%);
+      color: #fff;
+      padding: 2rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+    }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .subtitle { font-size: 1rem; opacity: 0.9; }
+    .section {
+      background: #fff;
+      border-radius: 12px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { color: #1a365d; margin-bottom: 1rem; border-bottom: 2px solid #16a34a; padding-bottom: 0.5rem; }
+    .log-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .log-table th, .log-table td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .log-table th {
+      background: #f7fafc;
+      font-weight: 600;
+      color: #1a365d;
+    }
+    .log-table tr:hover {
+      background: #f0fdf4;
+    }
+    .timestamp { color: #718096; font-size: 0.85rem; }
+    .topic { font-weight: 500; color: #1a365d; }
+    .answer { color: #4a5568; }
+    .status {
+      display: inline-block;
+      background: #16a34a;
+      color: #fff;
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🧠 Hoser Knowledge Base</h1>
+      <p class="subtitle">Autonomous Healthcare Finance Research & Findings</p>
+    </header>
+
+    <div class="section">
+      <div class="status">✓ Active 24/7</div>
+      <h2>Research Findings</h2>
+      <p>Latest autonomous research topics and discoveries:</p>
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Research Topic</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${logEntries.map(line => {
+            const parts = line.split(',"');
+            if (parts.length < 3) return '';
+            const ts = parts[0];
+            const topic = parts[1] ? parts[1].substring(0, 60) + '...' : '';
+            const answer = parts[2] ? parts[2].substring(0, 80) + '...' : '';
+            return `<tr>
+              <td class="timestamp">${ts}</td>
+              <td class="topic">${topic}</td>
+              <td class="answer">${answer}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      ${logEntries.length === 0 ? '<p style="color: #718096; margin-top: 1rem;">No research findings yet. Hoser will log daily research here.</p>' : ''}
+    </div>
+
+    <div class="section">
+      <h2>📚 Knowledge Structure</h2>
+      <ul style="list-style: none; padding: 0;">
+        <li style="padding: 0.5rem 0;">📖 <strong>/research</strong> - Healthcare finance concepts (HOPD, Novitas, MRF, payers)</li>
+        <li style="padding: 0.5rem 0;">🏥 <strong>/hospitals</strong> - DFW facility profiles & MRF data</li>
+        <li style="padding: 0.5rem 0;">🔧 <strong>/scrapers</strong> - Data scraping strategies & targets</li>
+        <li style="padding: 0.5rem 0;">💡 <strong>/findings</strong> - Key insights & applicability</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>🎯 Mission</h2>
+      <p>Make Hosparent the DFW #1 price transparency tool by continuously researching, diagnosing, and improving data quality. Hoser researches 24/7, identifies pricing anomalies, and recommends improvements for hospital procedure pricing transparency.</p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+    res.send(html);
+  } catch (err) {
+    console.error('[/hoser]', err.message);
+    res.status(500).send('<h1>Error</h1><p>' + err.message + '</p>');
+  }
+});
+
 // ── HEALTH ────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({
   status: 'ok',
