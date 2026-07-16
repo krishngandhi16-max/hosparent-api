@@ -27,15 +27,32 @@ app.post('/agent', async (req, res) => {
   }
 });
 
+// ── TTS (Text-to-Speech) ─────────────────────────────────────
+// POST { text } -> ElevenLabs TTS -> mp3 audio back.
+// Requires ELEVENLABS_API_KEY in .env.
+app.post('/tts', async (req, res) => {
+  try {
+    const { text } = req.body || {};
+    if (!text) return res.status(400).json({ error: 'missing "text"' });
+    const { synthesizeElevenLabs } = require('./voice');
+    const audio = await synthesizeElevenLabs(text);
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(audio);
+  } catch (err) {
+    console.error('[/tts]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── VOICE ─────────────────────────────────────────────────
-// Optional: POST raw WAV audio -> Azure STT -> agent -> Azure TTS (mp3 audio back).
-// Transcript + answer are also returned in response headers. Needs AZURE_SPEECH_*.
+// Optional: POST raw WAV audio -> Azure STT -> agent -> ElevenLabs TTS (mp3 audio back).
+// Transcript + answer are also returned in response headers. Needs AZURE_SPEECH_* + ELEVENLABS_*.
 app.post('/voice', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
   try {
-    const { transcribe, synthesize } = require('./voice');
+    const { transcribe, synthesizeElevenLabs } = require('./voice');
     const transcript = await transcribe(req.body);
     const { answer } = await runAgent(transcript);
-    const audio = await synthesize(answer);
+    const audio = await synthesizeElevenLabs(answer);
     res.set('X-Transcript', encodeURIComponent(transcript));
     res.set('X-Answer', encodeURIComponent(answer));
     res.set('Content-Type', 'audio/mpeg');

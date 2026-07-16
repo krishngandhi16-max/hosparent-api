@@ -114,9 +114,35 @@
   }
 
   function speak(text) {
-    if (!('speechSynthesis' in window)) return;
     isSpeaking = true;
     stopBtn.disabled = false;
+
+    // Try ElevenLabs first (better quality), fallback to browser speech
+    fetch('/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+      .then(res => res.blob())
+      .then(blob => {
+        const audio = new Audio(URL.createObjectURL(blob));
+        audio.onended = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
+        audio.onerror = () => {
+          isSpeaking = false;
+          stopBtn.disabled = toggleMode ? false : true;
+          console.warn('ElevenLabs audio error, trying browser speech');
+          speakBrowser(text);
+        };
+        audio.play();
+      })
+      .catch(err => {
+        console.warn('ElevenLabs failed:', err.message, '— falling back to browser speech');
+        speakBrowser(text);
+      });
+  }
+
+  function speakBrowser(text) {
+    if (!('speechSynthesis' in window)) return;
     const u = new SpeechSynthesisUtterance(text);
     u.onend = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };
     u.onerror = () => { isSpeaking = false; stopBtn.disabled = toggleMode ? false : true; };

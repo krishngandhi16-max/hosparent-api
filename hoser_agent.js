@@ -224,15 +224,14 @@ async function healthCheckRoutine() {
     const result = await runReadonlySql(`
       SELECT
         (SELECT COUNT(*) FROM prices WHERE is_suspicious = true) as flagged_prices,
-        (SELECT COUNT(DISTINCT hospital_id) FROM prices) as hospital_count,
-        (SELECT COUNT(DISTINCT procedure_id) FROM prices) as procedure_count,
-        (SELECT COUNT(DISTINCT cpt_code) FROM cpt_price_bounds) as bounds_count
-    `, { timeoutMs: 15000 });
+        (SELECT COUNT(*) FROM prices) as total_prices,
+        (SELECT COUNT(*) FROM cpt_price_bounds) as bounds_count
+    `, { timeoutMs: 5000 });
 
     console.log(`[Hoser] Health status:`, result.rows[0]);
     return result.rows[0];
   } catch (e) {
-    console.error(`[Hoser] Health check failed:`, e.message);
+    console.error(`[Hoser] Health check failed (non-blocking):`, e.message);
     return { error: e.message };
   }
 }

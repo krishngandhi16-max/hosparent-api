@@ -56,4 +56,41 @@ function synthesize(text, voiceName = process.env.AZURE_SPEECH_VOICE || 'en-US-J
   });
 }
 
-module.exports = { transcribe, synthesize };
+// ElevenLabs TTS (higher quality, cheaper than Azure)
+async function synthesizeElevenLabs(text, voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM') {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) throw new Error('ELEVENLABS_API_KEY is not set');
+
+  const https = require('https');
+  return new Promise((resolve, reject) => {
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+    const options = {
+      hostname: 'api.elevenlabs.io',
+      path: `/v1/text-to-speech/${voiceId}`,
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = Buffer.alloc(0);
+      res.on('data', (chunk) => { data = Buffer.concat([data, chunk]); });
+      res.on('end', () => {
+        if (res.statusCode === 200) resolve(data);
+        else reject(new Error(`ElevenLabs API error ${res.statusCode}: ${data.toString()}`));
+      });
+    });
+
+    req.on('error', reject);
+    req.write(JSON.stringify({
+      text,
+      model_id: 'eleven_monolingual_v1',
+      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+    }));
+    req.end();
+  });
+}
+
+module.exports = { transcribe, synthesize, synthesizeElevenLabs };
