@@ -61,11 +61,11 @@ async function hoserResearch(question) {
 
   const tools = [
     {
-      type: 'web_search',
+      type: 'web_search_20260209',
       name: 'web_search',
     },
     {
-      type: 'text',
+      type: 'custom',
       name: 'run_readonly_sql',
       description: 'Query the database (SELECT only) to diagnose pricing issues.',
       input_schema: {
@@ -81,10 +81,9 @@ async function hoserResearch(question) {
   const messages = [{ role: 'user', content: String(question || '') }];
 
   try {
-    const response = await client.beta.messages.toolRunner({
+    const response = await client.messages.create({
       model: MODEL,
       max_tokens: 4096,
-      thinking: { type: 'adaptive' },
       system: SYSTEM_PROMPT,
       tools,
       messages,
