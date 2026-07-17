@@ -954,6 +954,427 @@ app.post('/hoser', async (req, res) => {
   }
 });
 
+// ── AGENT OFFICE ─────────────────────────────────────
+// Visual dashboard showing autonomous agents working together
+app.get('/office', async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const vaultRoot = path.join(__dirname, 'hoser-knowledge');
+
+    // Get health status
+    let hosraStatus = 'idle';
+    let lastResearch = 'Initializing...';
+    const dailyLog = path.join(vaultRoot, 'findings', 'daily_log.csv');
+    if (fs.existsSync(dailyLog)) {
+      const csv = fs.readFileSync(dailyLog, 'utf8');
+      const lines = csv.split('\n').filter(l => l.trim());
+      if (lines.length > 1) {
+        const last = lines[lines.length - 1];
+        const parts = last.split(',"');
+        lastResearch = parts[1] ? parts[1].substring(0, 70) : 'Research active...';
+        hosraStatus = 'active';
+      }
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Office — Hosparent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1a365d 100%);
+      color: #e2e8f0;
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    .container { max-width: 1400px; margin: 0 auto; }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      animation: fadeIn 0.6s ease;
+    }
+
+    h1 {
+      font-size: 3rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, #16a34a, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      font-size: 1.1rem;
+      color: #94a3b8;
+    }
+
+    .office-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 2rem;
+      margin-bottom: 3rem;
+    }
+
+    .agent-card {
+      background: rgba(30, 41, 59, 0.8);
+      border: 2px solid #334155;
+      border-radius: 16px;
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .agent-card:hover {
+      border-color: #16a34a;
+      box-shadow: 0 0 20px rgba(22, 163, 74, 0.2);
+      transform: translateY(-5px);
+    }
+
+    .agent-card.active {
+      border-color: #3b82f6;
+      box-shadow: 0 0 30px rgba(59, 130, 246, 0.3);
+    }
+
+    .agent-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    .agent-card.active .agent-icon {
+      animation: bounce 0.6s ease-in-out infinite;
+    }
+
+    .agent-name {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      margin-bottom: 0.5rem;
+    }
+
+    .agent-role {
+      font-size: 0.9rem;
+      color: #94a3b8;
+      margin-bottom: 1rem;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+
+    .status-badge.active {
+      background: rgba(22, 163, 74, 0.2);
+      color: #86efac;
+      border: 1px solid #16a34a;
+    }
+
+    .status-badge.idle {
+      background: rgba(148, 163, 184, 0.2);
+      color: #cbd5e1;
+      border: 1px solid #64748b;
+    }
+
+    .status-badge.thinking {
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+      border: 1px solid #3b82f6;
+    }
+
+    .activity-log {
+      background: rgba(15, 23, 42, 0.6);
+      border-left: 4px solid #16a34a;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      color: #cbd5e1;
+      max-height: 120px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+    }
+
+    .activity-log::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .activity-log::-webkit-scrollbar-track {
+      background: rgba(51, 65, 85, 0.3);
+      border-radius: 3px;
+    }
+
+    .activity-log::-webkit-scrollbar-thumb {
+      background: #16a34a;
+      border-radius: 3px;
+    }
+
+    .interactions {
+      background: rgba(30, 41, 59, 0.8);
+      border: 2px solid #334155;
+      border-radius: 16px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .interactions h2 {
+      font-size: 1.5rem;
+      color: #f1f5f9;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .interaction-flow {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin: 1rem 0;
+      padding: 1rem;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 12px;
+      font-size: 0.95rem;
+    }
+
+    .agent-label {
+      background: rgba(22, 163, 74, 0.2);
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      color: #86efac;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .arrow {
+      color: #64748b;
+      font-size: 1.5rem;
+    }
+
+    .task {
+      flex: 1;
+      color: #cbd5e1;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+
+    .stat-box {
+      background: rgba(30, 41, 59, 0.8);
+      border: 2px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #16a34a;
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-label {
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-15px); }
+    }
+
+    .pulse {
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .links {
+      text-align: center;
+      margin-top: 3rem;
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .link-btn {
+      padding: 0.75rem 1.5rem;
+      background: rgba(22, 163, 74, 0.2);
+      border: 2px solid #16a34a;
+      border-radius: 8px;
+      color: #86efac;
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .link-btn:hover {
+      background: rgba(22, 163, 74, 0.4);
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🏢 Agent Office</h1>
+      <p class="subtitle">Autonomous healthcare finance specialists at work</p>
+    </header>
+
+    <div class="office-grid">
+      <!-- Hoser Agent -->
+      <div class="agent-card ${hosraStatus === 'active' ? 'active' : ''}">
+        <div class="agent-icon">🧠</div>
+        <div class="agent-name">Hoser</div>
+        <div class="agent-role">Healthcare Finance Specialist</div>
+        <div class="status-badge ${hosraStatus === 'active' ? 'active' : 'idle'}">
+          ${hosraStatus === 'active' ? '● Researching' : '● Monitoring'}
+        </div>
+        <div class="activity-log">
+          📌 ${lastResearch}
+        </div>
+      </div>
+
+      <!-- Query Agent -->
+      <div class="agent-card active">
+        <div class="agent-icon">🎤</div>
+        <div class="agent-name">Voice Agent</div>
+        <div class="agent-role">Natural Language Interface</div>
+        <div class="status-badge active">● Ready to listen</div>
+        <div class="activity-log">
+          🎙️ Listening for voice input<br>
+          📝 Processing natural language<br>
+          💬 Generating responses
+        </div>
+      </div>
+
+      <!-- Validator Agent -->
+      <div class="agent-card">
+        <div class="agent-icon">✅</div>
+        <div class="agent-name">Validator</div>
+        <div class="agent-role">Data Quality & Bounds Check</div>
+        <div class="status-badge thinking">● Monitoring</div>
+        <div class="activity-log">
+          🔍 Checking price bounds<br>
+          🚩 Flagging anomalies<br>
+          📊 660K suspicious prices
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent Interactions -->
+    <div class="interactions">
+      <h2>🔄 Agent Interactions</h2>
+
+      <div class="interaction-flow">
+        <span class="agent-label">🎤 You (Voice)</span>
+        <span class="arrow">→</span>
+        <span class="task">Ask about hospital pricing or healthcare costs</span>
+      </div>
+
+      <div class="interaction-flow">
+        <span class="agent-label">🎤 Voice Agent</span>
+        <span class="arrow">→</span>
+        <span class="task">Parse natural language question</span>
+      </div>
+
+      <div class="interaction-flow">
+        <span class="agent-label">🧠 Hoser + Validator</span>
+        <span class="arrow">→</span>
+        <span class="task">Query database, check bounds, validate prices</span>
+      </div>
+
+      <div class="interaction-flow">
+        <span class="agent-label">🎤 Voice Agent</span>
+        <span class="arrow">→</span>
+        <span class="task">Synthesize answer to speech (Azure TTS)</span>
+      </div>
+
+      <div class="interaction-flow">
+        <span class="agent-label">🔊 Speaker</span>
+        <span class="arrow">→</span>
+        <span class="task">Play answer back to you</span>
+      </div>
+    </div>
+
+    <!-- Statistics -->
+    <div class="stats">
+      <div class="stat-box">
+        <div class="stat-value">48.6M</div>
+        <div class="stat-label">Prices in Database</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">43</div>
+        <div class="stat-label">DFW Hospitals</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">262K</div>
+        <div class="stat-label">Procedures</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value">24/7</div>
+        <div class="stat-label">Hoser Research Cycle</div>
+      </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div class="links">
+      <a href="/voice.html" class="link-btn">🎤 Voice Interface</a>
+      <a href="/hoser" class="link-btn">📚 Knowledge Base</a>
+      <a href="/agent" class="link-btn">🤖 Ask Agent</a>
+    </div>
+  </div>
+
+  <script>
+    // Auto-refresh stats every 10 seconds
+    setInterval(() => {
+      location.reload();
+    }, 10000);
+  </script>
+</body>
+</html>
+    `;
+    res.send(html);
+  } catch (err) {
+    console.error('[/office]', err.message);
+    res.status(500).send('<h1>Error</h1><p>' + err.message + '</p>');
+  }
+});
+
 // ── HOSER KNOWLEDGE BASE ──────────────────────────────
 // Web interface to browse Hoser's autonomous research findings
 app.get('/hoser', async (req, res) => {
