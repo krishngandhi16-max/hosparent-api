@@ -275,6 +275,27 @@ function getClient() {
   return _client;
 }
 
+// ── conversation memory ─────────────────────────────────────────────────────
+// Rolling history of text turns (user question -> final answer) so the agent
+// tracks the whole conversation across questions. Tool calls are not stored —
+// only the final text — which keeps replays valid and token cost bounded.
+const MAX_HISTORY_MESSAGES = 30; // 15 exchanges
+let conversationHistory = [];
+
+function rememberExchange(question, answer) {
+  conversationHistory.push({ role: 'user', content: question });
+  conversationHistory.push({ role: 'assistant', content: answer || '(no answer)' });
+  if (conversationHistory.length > MAX_HISTORY_MESSAGES) {
+    conversationHistory = conversationHistory.slice(-MAX_HISTORY_MESSAGES);
+  }
+}
+
+function resetConversation() {
+  const n = conversationHistory.length / 2;
+  conversationHistory = [];
+  return { cleared_exchanges: n };
+}
+
 /**
  * Answer a natural-language question.
  * Haiku by default (cheap, DB queries only). Opus on demand for research (web_search, complex analysis).
@@ -288,12 +309,13 @@ async function runAgent(question, options = {}) {
   const model = useResearch ? MODEL_RESEARCH : MODEL_DEFAULT;
 
   const tools = buildClientTools(actions);
+  const q = String(question || '');
   const params = {
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
     tools,
-    messages: [{ role: 'user', content: String(question || '') }],
+    messages: [...conversationHistory, { role: 'user', content: q }],
   };
 
   // Group B: open web (only for research mode, which is Opus).
@@ -314,7 +336,9 @@ async function runAgent(question, options = {}) {
     .join('\n')
     .trim();
 
+  rememberExchange(q, answer);
+
   return { answer, actions_taken: actions, model, research_mode: useResearch };
 }
 
-module.exports = { runAgent, diagnosePrice, SAFE_FIXES };
+module.exports = { runAgent, resetConversation, diagnosePrice, SAFE_FIXES };

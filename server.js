@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js)
-const { runAgent } = require('./db_agent');
+const { runAgent, resetConversation } = require('./db_agent');
 const { initTasksTable, createTask, getActiveTasks, getTask, startTask, completeTask, getTaskStats } = require('./tasks');
 
 const app = express();
@@ -26,6 +26,11 @@ app.post('/agent', async (req, res) => {
     console.error('[/agent]', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /agent/reset — wipe Hoser's conversation memory (start a fresh topic)
+app.post('/agent/reset', (req, res) => {
+  res.json(resetConversation());
 });
 
 // ── TTS (Text-to-Speech) ─────────────────────────────────────
