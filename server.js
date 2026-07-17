@@ -5,6 +5,8 @@ const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js
 const { runAgent, resetConversation } = require('./db_agent');
 const { initTasksTable, createTask, getActiveTasks, getTask, startTask, completeTask, getTaskStats } = require('./tasks');
 const { recordSearch, getActivity } = require('./activity');
+const learn = require('./learn');
+const watchdog = require('./insurance_watchdog_agent');
 
 const app = express();
 
@@ -879,6 +881,53 @@ app.get('/search-therapists', async (req, res) => {
       ORDER BY session_fee_min ASC NULLS LAST LIMIT 50
     `, [city ? `%${city}%` : null, q ? `%${q}%` : null]);
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── LEARN TAB ─────────────────────────────────────────────
+// Consumer-facing education: premium-vs-cash calculator, insurance-news feed (cached,
+// refreshed by refresh_insurance_news.js — never live per pageview), and the rights
+// navigator (Opus, on-demand, rate-limited since it costs real money per call).
+app.post('/learn/calculator', async (req, res) => {
+  try {
+    res.json(await learn.calculateSavings(req.body || {}));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/learn/how-to-save', (req, res) => res.json(learn.HOW_TO_SAVE_GUIDE));
+
+app.get('/learn/insurance-news', async (req, res) => {
+  try {
+    res.json({ stories: await learn.getInsuranceNews() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Naive in-memory per-IP daily limiter. This endpoint calls Opus + web_search on every
+// request, so with no cap a single visitor hammering it (or a bot) could burn the whole
+// monthly AI budget in an afternoon. Resets on server restart — good enough for now.
+const RIGHTS_DAILY_LIMIT = Number(process.env.LEARN_RIGHTS_DAILY_LIMIT || 8);
+const rightsUsage = new Map(); // ip -> { count, day }
+app.post('/learn/rights-navigator', async (req, res) => {
+  const { situation } = req.body || {};
+  if (!situation || !String(situation).trim()) {
+    return res.status(400).json({ error: 'situation is required' });
+  }
+  const ip = req.headers['cf-connecting-ip'] || req.ip;
+  const today = new Date().toISOString().slice(0, 10);
+  const entry = rightsUsage.get(ip);
+  if (entry && entry.day === today && entry.count >= RIGHTS_DAILY_LIMIT) {
+    return res.status(429).json({ error: `Daily limit reached (${RIGHTS_DAILY_LIMIT}/day). Try again tomorrow.` });
+  }
+  rightsUsage.set(ip, { day: today, count: (entry && entry.day === today ? entry.count : 0) + 1 });
+
+  try {
+    res.json(await watchdog.navigatePatientRights(situation));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
