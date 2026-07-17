@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js)
 const { runAgent } = require('./db_agent');
-const { initTasksTable, getActiveTasks, getTask, startTask, completeTask } = require('./tasks');
+const { initTasksTable, createTask, getActiveTasks, getTask, startTask, completeTask, getTaskStats } = require('./tasks');
 
 const app = express();
 
@@ -64,6 +64,10 @@ app.post('/voice', express.raw({ type: '*/*', limit: '10mb' }), async (req, res)
   }
 });
 
+// ── COMMAND CENTER ────────────────────────────────────────
+// One-tab dashboard: isometric office + task board + Hoser chat + dictation.
+app.get('/command', (req, res) => res.redirect('/command.html'));
+
 // ── TASK COORDINATION ─────────────────────────────────────
 // GET /tasks/active - Get all active tasks (status != completed)
 app.get('/tasks/active', async (req, res) => {
@@ -72,6 +76,29 @@ app.get('/tasks/active', async (req, res) => {
     res.json(tasks);
   } catch (err) {
     console.error('[/tasks/active]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /tasks/stats - 24h counts by status (must be before /tasks/:id)
+app.get('/tasks/stats', async (req, res) => {
+  try {
+    res.json(await getTaskStats());
+  } catch (err) {
+    console.error('[/tasks/stats]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /tasks/create - Create a task (Hoser or manual test)
+app.post('/tasks/create', async (req, res) => {
+  try {
+    const { type, assignee, priority, issue_description, hospital_id, metadata } = req.body || {};
+    if (!type || !assignee) return res.status(400).json({ error: 'missing "type" or "assignee"' });
+    const task = await createTask({ type, assignee, priority, issue_description, hospital_id, metadata });
+    res.json(task);
+  } catch (err) {
+    console.error('[/tasks/create]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -101,40 +101,21 @@ async function completeTask(id, result) {
   }
 }
 
-// Get task stats for office UI (summary of all agents' workload)
+// Get task stats for office UI (24h counts by status)
 async function getTaskStats() {
   try {
     const result = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(DISTINCT assignee) as active_agents,
-        assignee,
-        status
+      SELECT status, COUNT(*)::int AS n
       FROM tasks
       WHERE created_at > NOW() - INTERVAL '24 hours'
-      GROUP BY assignee, status
-      ORDER BY status DESC, assignee ASC
+      GROUP BY status
     `);
-
-    const byStatus = {
-      pending: 0,
-      in_progress: 0,
-      completed: 0
-    };
-    const byAgent = {};
-
-    result.rows.forEach(row => {
-      byStatus[row.status] = (byStatus[row.status] || 0) + 1;
-      if (!byAgent[row.assignee]) byAgent[row.assignee] = { pending: 0, in_progress: 0, completed: 0 };
-      byAgent[row.assignee][row.status] = row.count;
-    });
-
-    return { byStatus, byAgent };
+    const stats = { pending: 0, in_progress: 0, completed: 0 };
+    for (const row of result.rows) stats[row.status] = row.n;
+    return stats;
   } catch (e) {
     console.error('[tasks] getTaskStats failed:', e.message);
-    return { byStatus: {}, byAgent: {} };
+    return { pending: 0, in_progress: 0, completed: 0 };
   }
 }
 
