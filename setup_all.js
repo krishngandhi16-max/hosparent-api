@@ -37,6 +37,14 @@ async function setup() {
     `);
     console.log('   ✓ email_logs table ready');
 
+    // 2b. Create Learn tab / Terry / Indy tables
+    console.log('Creating Learn tab, insurance news, and ad queue tables...');
+    const { ensureNewsTable } = require('./learn');
+    const { ensureAdQueueTable } = require('./indy_agent');
+    await ensureNewsTable();
+    await ensureAdQueueTable();
+    console.log('   OK insurance_news + ad_queue tables ready');
+
     // 3. Ensure bounds columns exist
     console.log('💰 Ensuring price bounds columns...');
     await pool.query(`

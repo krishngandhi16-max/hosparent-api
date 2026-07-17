@@ -7,6 +7,7 @@ node_modules/
 *.html
 *.zip
 tmp_methodist/
+obsidian_vault/
 
 # Plaintext secrets must never be tracked
 Hosparent_notepad.txt

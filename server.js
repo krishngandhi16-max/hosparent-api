@@ -7,6 +7,10 @@ const { initTasksTable, createTask, getActiveTasks, getTask, startTask, complete
 const { recordSearch, getActivity } = require('./activity');
 const learn = require('./learn');
 const watchdog = require('./insurance_watchdog_agent');
+const terry = require('./terry_agent');
+const indy = require('./indy_agent');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
@@ -18,7 +22,7 @@ app.use(express.json());
 // search API only. The command center, office, tasks, Hoser, voice/TTS (which
 // spend Anthropic/Azure money) stay localhost-only. Tunnel traffic is detected
 // by the cf-connecting-ip header cloudflared adds, plus a non-localhost Host.
-const PRIVATE_PATHS = [/^\/command/, /^\/office/, /^\/hoser/, /^\/tasks/, /^\/agent/, /^\/tts/, /^\/voice/, /^\/activity/];
+const PRIVATE_PATHS = [/^\/command/, /^\/office/, /^\/hoser/, /^\/tasks/, /^\/agent/, /^\/tts/, /^\/voice/, /^\/activity/, /^\/vault/, /^\/marketing/];
 app.use((req, res, next) => {
   const host = String(req.headers.host || '');
   const external = !!req.headers['cf-connecting-ip'] || !/^(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$/i.test(host);
@@ -928,6 +932,27 @@ app.post('/learn/rights-navigator', async (req, res) => {
 
   try {
     res.json(await watchdog.navigatePatientRights(situation));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TERRY (research vault) + INDY (ad drafts) — internal ops, localhost-only ────
+app.get('/vault', (req, res) => {
+  try {
+    if (!fs.existsSync(terry.VAULT_DIR)) return res.json({ notes: [] });
+    const notes = fs.readdirSync(terry.VAULT_DIR)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => ({ file: f, content: fs.readFileSync(path.join(terry.VAULT_DIR, f), 'utf8') }));
+    res.json({ notes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/marketing/ad-queue', async (req, res) => {
+  try {
+    res.json({ drafts: await indy.getDraftQueue() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
