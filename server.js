@@ -4,11 +4,28 @@ const cors = require('cors');
 const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js)
 const { runAgent, resetConversation } = require('./db_agent');
 const { initTasksTable, createTask, getActiveTasks, getTask, startTask, completeTask, getTaskStats } = require('./tasks');
+const { recordSearch, getActivity } = require('./activity');
 
 const app = express();
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json());
+
+// ── PRIVATE vs PUBLIC ─────────────────────────────────────
+// Requests arriving through the Cloudflare tunnel are public: they get the
+// search API only. The command center, office, tasks, Hoser, voice/TTS (which
+// spend Anthropic/Azure money) stay localhost-only. Tunnel traffic is detected
+// by the cf-connecting-ip header cloudflared adds, plus a non-localhost Host.
+const PRIVATE_PATHS = [/^\/command/, /^\/office/, /^\/hoser/, /^\/tasks/, /^\/agent/, /^\/tts/, /^\/voice/, /^\/activity/];
+app.use((req, res, next) => {
+  const host = String(req.headers.host || '');
+  const external = !!req.headers['cf-connecting-ip'] || !/^(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$/i.test(host);
+  if (external && PRIVATE_PATHS.some((p) => p.test(req.path))) {
+    return res.status(403).json({ error: 'private endpoint — not available on the public URL' });
+  }
+  next();
+});
+
 app.use(express.static('public'));
 
 // ── AGENT ─────────────────────────────────────────────────
@@ -467,7 +484,7 @@ app.get('/search', async (req, res) => {
 
   const cacheKey = `search:${q.toLowerCase().trim()}`;
   const cached = cacheGet(cacheKey);
-  if (cached) return res.json(cached);
+  if (cached) { recordSearch(q, cached); return res.json(cached); }
 
   const cptCodes = resolveCpts(q);
 
@@ -526,12 +543,17 @@ app.get('/search', async (req, res) => {
     `, params);
 
     cacheSet(cacheKey, result.rows);
+    recordSearch(q, result.rows);
     res.json(result.rows);
   } catch (err) {
     console.error('[/search]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── LIVE ACTIVITY (localhost-only via the privacy guard) ──
+// Feeds the Command Center: recent searches + daily counters for Chester.
+app.get('/activity', (req, res) => res.json(getActivity()));
 
 // ── PROCEDURE PRICES ─────────────────────────────────────
 // FIXED: was is_suspicious-only. Now bounds-checked like everything else.
