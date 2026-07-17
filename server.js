@@ -307,7 +307,19 @@ const synonyms = {
   'brain mri': ['70551','70552','70553'],
   'ct abdomen': ['74177','74178','74176'],
   'abdominal ct': ['74177','74178','74176'],
+  // 'colonoscopy' alone stays a broad family (45378 diagnostic/screening, 45380 with
+  // biopsy, 45385 with polyp removal by snare) for generic browsing — but these are
+  // NOT interchangeable prices for "the same procedure," and specific phrasing must
+  // resolve to ONE code so the UI stops comparing a $414 screening against a $2,774
+  // with-biopsy procedure as if they were the same thing. Longer key wins in
+  // resolveCpts(), so these override the generic 'colonoscopy' entry above.
   'colonoscopy': ['45378','45380','45385'],
+  'colonoscopy (screening)': ['45378'],
+  'colonoscopy screening': ['45378'],
+  'screening colonoscopy': ['45378'],
+  'colonoscopy with biopsy': ['45380'],
+  'colonoscopy with polyp removal': ['45385'],
+  'colonoscopy with polypectomy': ['45385'],
   'virtual colonoscopy': ['74263'],
   'ct colonography': ['74263'],
   'knee replacement': ['27447'],
