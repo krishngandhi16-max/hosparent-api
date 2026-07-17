@@ -7,6 +7,7 @@
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic = AnthropicPkg.default || AnthropicPkg;
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
+const { createTask } = require('./tasks');
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -263,6 +264,27 @@ async function dailyResearchRoutine() {
     const entry = `${timestamp},"${topic.substring(0, 100)}","${answer}..."\n`;
     fs.appendFileSync(findingsLog, entry, 'utf8');
     console.log(`[Hoser] Findings logged`);
+
+    // 4. Autonomous task creation based on discovered issues
+    if (stats.flagged > 100) {
+      await createTask({
+        type: 'FLAG_PRICES',
+        assignee: 'Validator',
+        priority: 'high',
+        issue_description: `${stats.flagged} suspicious prices detected. Need validation review.`,
+        metadata: { reason: 'health_check', flagged_count: stats.flagged }
+      });
+    }
+
+    if (stats.procedures < 5000) {
+      await createTask({
+        type: 'AUDIT_HOSPITAL',
+        assignee: 'Validator',
+        priority: 'normal',
+        issue_description: `Only ${stats.procedures} procedures in database. Need to audit hospital coverage.`,
+        metadata: { reason: 'low_procedure_count', count: stats.procedures }
+      });
+    }
 
     return result;
   } catch (e) {

@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { pool, ensureBoundsColumns } = require('./db'); // shared pool (see db.js)
 const { runAgent } = require('./db_agent');
+const { initTasksTable, getActiveTasks, getTask, startTask, completeTask } = require('./tasks');
 
 const app = express();
 
@@ -59,6 +60,53 @@ app.post('/voice', express.raw({ type: '*/*', limit: '10mb' }), async (req, res)
     res.send(audio);
   } catch (err) {
     console.error('[/voice]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TASK COORDINATION ─────────────────────────────────────
+// GET /tasks/active - Get all active tasks (status != completed)
+app.get('/tasks/active', async (req, res) => {
+  try {
+    const tasks = await getActiveTasks();
+    res.json(tasks);
+  } catch (err) {
+    console.error('[/tasks/active]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /tasks/:id - Get a single task
+app.get('/tasks/:id', async (req, res) => {
+  try {
+    const task = await getTask(parseInt(req.params.id));
+    if (!task) return res.status(404).json({ error: 'task not found' });
+    res.json(task);
+  } catch (err) {
+    console.error('[/tasks/:id]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /tasks/:id/start - Mark task as in_progress
+app.post('/tasks/:id/start', async (req, res) => {
+  try {
+    const task = await startTask(parseInt(req.params.id));
+    res.json(task);
+  } catch (err) {
+    console.error('[/tasks/:id/start]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /tasks/:id/complete - Mark task as completed
+app.post('/tasks/:id/complete', async (req, res) => {
+  try {
+    const { result } = req.body || {};
+    const task = await completeTask(parseInt(req.params.id), result || 'Task completed');
+    res.json(task);
+  } catch (err) {
+    console.error('[/tasks/:id/complete]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1458,9 +1506,17 @@ app.get('/health', (req, res) => res.json({
 }));
 
 const PORT = 3001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Hosparent API v3.2 on http://localhost:${PORT}`);
   console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded (per-type)`);
+
+  // Initialize tasks table for agent coordination
+  try {
+    await initTasksTable();
+    console.log(`[tasks] Task coordination table initialized`);
+  } catch (e) {
+    console.error(`[tasks] Failed to initialize:`, e.message);
+  }
 
   // Start Hoser monitoring
   try {
