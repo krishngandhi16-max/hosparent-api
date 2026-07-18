@@ -52,9 +52,33 @@ async function ensureStoriesTable() {
   `);
 }
 
-// Perplexity-backed story research: one search-grounded call that returns recent,
-// sourced stories as JSON. Used when PERPLEXITY_API_KEY is set.
+// Perplexity-backed story research. Uses the Search API first — it returns REAL
+// articles (title/url/snippet/date), so URLs can never be hallucinated. Falls
+// back to a research() JSON call if the search endpoint errors.
 async function findStoriesViaPerplexity(n) {
+  try {
+    const results = await perplexity.search(
+      'health insurance claim denial OR surprise hospital bill OR hospital price gouging OR price transparency violation news',
+      { maxResults: Math.max(n * 2, 8), maxTokensPerPage: 200 }
+    );
+    // Freshness gate: only DATED results from the last 60 days qualify. Stale or
+    // undated articles never become posts — if nothing fresh, fall through to the
+    // research() path below instead.
+    const cutoff = Date.now() - 60 * 24 * 3600 * 1000;
+    const fresh = results.filter((r) => r.url && r.title && r.date && new Date(r.date).getTime() >= cutoff);
+    if (fresh.length) {
+      return {
+        stories: fresh.slice(0, n).map((r) => ({
+          headline: r.title,
+          summary: (r.snippet || '').slice(0, 400),
+          source: (() => { try { return new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { return null; } })(),
+          url: r.url,
+        })),
+      };
+    }
+  } catch (e) {
+    console.error('[indy] perplexity search failed, falling back to research():', e.message);
+  }
   const { text, citations } = await perplexity.research(
     `Find ${n} recent (last 30 days) US news stories about health-insurance or hospital-billing practices that hurt patients — claim denials, surprise bills, price gouging, transparency violations. Real, citable stories only.`,
     {

@@ -71,4 +71,42 @@ async function research(prompt, opts = {}) {
   return { text, citations, model: data.model || opts.model || DEFAULT_MODEL };
 }
 
-module.exports = { isConfigured, research, DEFAULT_MODEL };
+/**
+ * Perplexity Search API — raw web search returning REAL articles (title, url,
+ * snippet, date). No LLM in the loop, so URLs are guaranteed real. This is the
+ * right tool for story-finding; research() is the right tool for synthesis.
+ * @param {string} query
+ * @param {object} [opts]
+ * @param {number} [opts.maxResults=8]
+ * @param {number} [opts.maxTokensPerPage=256]
+ * @returns {Promise<{title: string, url: string, snippet: string, date: string|null}[]>}
+ */
+async function search(query, opts = {}) {
+  if (!isConfigured()) throw new Error('PERPLEXITY_API_KEY is not set');
+  const resp = await fetch('https://api.perplexity.ai/search', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: String(query),
+      max_results: opts.maxResults || 8,
+      max_tokens_per_page: opts.maxTokensPerPage || 256,
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`Perplexity Search API ${resp.status}: ${body.slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  return (data.results || []).map((r) => ({
+    title: r.title || '',
+    url: r.url || '',
+    snippet: r.snippet || '',
+    date: r.date || null,
+  }));
+}
+
+module.exports = { isConfigured, research, search, DEFAULT_MODEL };
