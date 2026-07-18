@@ -18,10 +18,14 @@ require('dotenv').config();
 const { pool } = require('./db');
 const { findInsuranceNews } = require('./insurance_watchdog_agent');
 const { upsertLearnEntry, ensureLearnTable } = require('./learn_content');
+const perplexity = require('./perplexity');
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic = AnthropicPkg.default || AnthropicPkg;
 
-const MODEL = 'claude-opus-4-8'; // research quality matters; bounded to once-daily batches
+// Research backend: Perplexity (official API) when PERPLEXITY_API_KEY is set —
+// purpose-built for cited web research and cheaper than Opus. Claude Opus +
+// web_search is the fallback so nothing breaks without the key.
+const MODEL = 'claude-opus-4-8'; // fallback research model; bounded to once-daily batches
 
 let _client;
 function getClient() {
@@ -48,11 +52,31 @@ async function ensureStoriesTable() {
   `);
 }
 
+// Perplexity-backed story research: one search-grounded call that returns recent,
+// sourced stories as JSON. Used when PERPLEXITY_API_KEY is set.
+async function findStoriesViaPerplexity(n) {
+  const { text, citations } = await perplexity.research(
+    `Find ${n} recent (last 30 days) US news stories about health-insurance or hospital-billing practices that hurt patients — claim denials, surprise bills, price gouging, transparency violations. Real, citable stories only.`,
+    {
+      system: `Return STRICT JSON only, no prose: {"stories":[{"headline":"...","summary":"1-2 sentences","source":"outlet name","url":"https://..."}]}. Only include stories you found via search with a real URL. Never invent a story or URL.`,
+    }
+  );
+  let parsed;
+  try { parsed = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { parsed = { stories: [] }; }
+  const stories = (parsed.stories || []).map((s, i) => ({
+    ...s,
+    url: s.url || citations[i] || null,
+  }));
+  return { stories };
+}
+
 // Find N stories and store them as status='found'. De-dupes on headline so the same
 // story isn't queued twice across days.
 async function findStories(n = 5) {
   await ensureStoriesTable();
-  const { stories } = await findInsuranceNews();
+  const { stories } = perplexity.isConfigured()
+    ? await findStoriesViaPerplexity(n)
+    : await findInsuranceNews();
   const saved = [];
   for (const s of (stories || []).slice(0, n)) {
     if (!s.headline) continue;
@@ -92,29 +116,44 @@ sources (CMS.gov, IRS, state agencies, reputable journalism). Never invent a sou
 rule. Return JSON only:
 {"body": "2-4 short paragraphs, plain English, actionable", "jurisdiction": "US federal | Texas | ...", "sources": ["url", ...]}`;
 
+// Research one Learn topic. Perplexity when configured (search-grounded with
+// citations built in), Claude Opus + web_search otherwise.
+async function researchOneTopic(t) {
+  const userPrompt = `Topic: ${t.title}\n${t.prompt}`;
+  if (perplexity.isConfigured()) {
+    const { text, citations } = await perplexity.research(userPrompt, { system: LEARN_SYSTEM });
+    let parsed;
+    try { parsed = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { parsed = { body: text, sources: [] }; }
+    // Perplexity returns its search citations even when the JSON omits them.
+    const sources = (parsed.sources && parsed.sources.length ? parsed.sources : citations) || [];
+    return { body: parsed.body || text, jurisdiction: parsed.jurisdiction, sources };
+  }
+  const resp = await getClient().beta.messages.toolRunner({
+    model: MODEL,
+    max_tokens: 1500,
+    system: LEARN_SYSTEM,
+    tools: [{ type: 'web_search_20260209', name: 'web_search' }],
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+  const text = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  let parsed;
+  try { parsed = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { parsed = { body: text, sources: [] }; }
+  return { body: parsed.body || text, jurisdiction: parsed.jurisdiction, sources: parsed.sources || [] };
+}
+
 // Research every Learn topic (or a subset) and upsert into learn_content.
 async function researchLearnContent(topics = LEARN_TOPICS) {
   await ensureLearnTable();
-  const client = getClient();
   const done = [];
   for (const t of topics) {
     try {
-      const resp = await client.beta.messages.toolRunner({
-        model: MODEL,
-        max_tokens: 1500,
-        system: LEARN_SYSTEM,
-        tools: [{ type: 'web_search_20260209', name: 'web_search' }],
-        messages: [{ role: 'user', content: `Topic: ${t.title}\n${t.prompt}` }],
-      });
-      const text = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-      let parsed;
-      try { parsed = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { parsed = { body: text, sources: [] }; }
+      const r = await researchOneTopic(t);
       await upsertLearnEntry({
         category: t.category,
         title: t.title,
-        body: parsed.body || text,
-        jurisdiction: parsed.jurisdiction || 'US federal',
-        sources: parsed.sources || [],
+        body: r.body,
+        jurisdiction: r.jurisdiction || 'US federal',
+        sources: r.sources,
       });
       done.push(t.title);
     } catch (e) {
