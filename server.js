@@ -6,11 +6,10 @@ const { runAgent, resetConversation } = require('./db_agent');
 const { initTasksTable, createTask, getActiveTasks, getTask, startTask, completeTask, getTaskStats } = require('./tasks');
 const { recordSearch, getActivity } = require('./activity');
 const learn = require('./learn');
+const learnContent = require('./learn_content');
 const watchdog = require('./insurance_watchdog_agent');
-const terry = require('./terry_agent');
-const indy = require('./indy_agent');
-const fs = require('fs');
-const path = require('path');
+const coordinator = require('./hoser_coordinator');
+const notify = require('./notify');
 
 const app = express();
 
@@ -916,6 +915,16 @@ app.post('/learn/calculator', async (req, res) => {
 
 app.get('/learn/how-to-save', (req, res) => res.json(learn.HOW_TO_SAVE_GUIDE));
 
+// PUBLIC free Learn-tab content (the Replit page reads this). Indy researches + populates
+// learn_content; ?category=lower_price or your_rights, or omit for everything.
+app.get('/learn/content', async (req, res) => {
+  try {
+    res.json({ content: await learnContent.getLearnContent(req.query.category) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/learn/insurance-news', async (req, res) => {
   try {
     res.json({ stories: await learn.getInsuranceNews() });
@@ -949,25 +958,65 @@ app.post('/learn/rights-navigator', async (req, res) => {
   }
 });
 
-// ── TERRY (research vault) + INDY (ad drafts) — internal ops, localhost-only ────
-app.get('/vault', (req, res) => {
+// ── INDY (research: stories) + TERRY (posting: drafts) — internal ops, localhost-only ──
+app.get('/marketing/stories', async (req, res) => {
   try {
-    if (!fs.existsSync(terry.VAULT_DIR)) return res.json({ notes: [] });
-    const notes = fs.readdirSync(terry.VAULT_DIR)
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => ({ file: f, content: fs.readFileSync(path.join(terry.VAULT_DIR, f), 'utf8') }));
-    res.json({ notes });
+    const r = await pool.query(`SELECT id, headline, summary, source, url, status, created_at FROM stories ORDER BY created_at DESC LIMIT 50`);
+    res.json({ stories: r.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/marketing/ad-queue', async (req, res) => {
+app.get('/marketing/post-queue', async (req, res) => {
   try {
-    res.json({ drafts: await indy.getDraftQueue() });
+    const r = await pool.query(`SELECT id, story_id, platform, text, cta, status, created_at, posted_at FROM post_queue ORDER BY created_at DESC LIMIT 50`);
+    res.json({ posts: r.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Kick Hoser's daily run on demand (localhost-only via /marketing prefix). Normally
+// fired by run_hoser_daily.js on a schedule, but handy to trigger from the office UI.
+app.post('/marketing/daily-run', async (req, res) => {
+  try {
+    res.json(await coordinator.dailyRun(req.body || {}));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SMS reply webhook (PUBLIC — Twilio calls it when you text back) ────────────
+// This is the "I text him GO ahead and he does it" half. It must be reachable through
+// the tunnel, so it's intentionally NOT in PRIVATE_PATHS — instead every request is
+// verified to actually come from Twilio (signature), and only your alert number's
+// replies are honored. Uses urlencoded body (Twilio posts form-encoded).
+app.post('/sms/incoming', express.urlencoded({ extended: false }), async (req, res) => {
+  const fullUrl = `https://${req.headers.host}${req.originalUrl}`;
+  const sig = req.headers['x-twilio-signature'];
+  if (notify.isConfigured() && !notify.validateTwilioSignature(fullUrl, req.body || {}, sig)) {
+    return res.status(403).type('text/xml').send('<Response></Response>');
+  }
+  const from = String(req.body.From || '');
+  const body = String(req.body.Body || '').trim().toLowerCase();
+
+  // Only the owner's number can approve.
+  if (from.replace(/\D/g, '').slice(-10) !== notify.DEFAULT_ALERT_PHONE.replace(/\D/g, '').slice(-10)) {
+    return res.status(200).type('text/xml').send('<Response></Response>');
+  }
+
+  try {
+    if (/^(go|go ahead|yes|post|approve)/.test(body)) {
+      coordinator.approveAndPost().catch((e) => console.error('[sms approve]', e.message));
+    } else if (/^(ignore|no|skip|reject)/.test(body)) {
+      coordinator.rejectPending().catch((e) => console.error('[sms reject]', e.message));
+    }
+  } catch (e) {
+    console.error('[sms/incoming]', e.message);
+  }
+  // Empty TwiML = acknowledge, no auto-reply (Hoser sends its own confirmation SMS).
+  res.status(200).type('text/xml').send('<Response></Response>');
 });
 
 // ── CONTRACTS ─────────────────────────────────────────────

@@ -37,13 +37,17 @@ async function setup() {
     `);
     console.log('   ✓ email_logs table ready');
 
-    // 2b. Create Learn tab / Terry / Indy tables
-    console.log('Creating Learn tab, insurance news, and ad queue tables...');
+    // 2b. Create Learn tab + agent-pipeline tables (Indy stories, Terry posts, Learn content)
+    console.log('Creating Learn tab, news, stories, post-queue, and learn-content tables...');
     const { ensureNewsTable } = require('./learn');
-    const { ensureAdQueueTable } = require('./indy_agent');
+    const { ensureLearnTable } = require('./learn_content');
+    const { ensureStoriesTable } = require('./indy_agent');
+    const { ensurePostQueue } = require('./terry_agent');
     await ensureNewsTable();
-    await ensureAdQueueTable();
-    console.log('   OK insurance_news + ad_queue tables ready');
+    await ensureLearnTable();
+    await ensureStoriesTable();
+    await ensurePostQueue();
+    console.log('   OK insurance_news + learn_content + stories + post_queue tables ready');
 
     // 3. Ensure bounds columns exist
     console.log('💰 Ensuring price bounds columns...');
