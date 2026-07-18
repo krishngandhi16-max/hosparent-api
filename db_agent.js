@@ -19,9 +19,10 @@ const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
 const { assertReadOnlySelect } = require('./sql_guard');
 
-const MODEL_DEFAULT = 'claude-haiku-4-5-20251001';
+// Sonnet 5 by default — the office DB guy needs to think on his own (near-Opus
+// agentic quality at ~40% of the cost). Opus for deep research / hardest analysis.
+const MODEL_DEFAULT = 'claude-sonnet-5';
 const MODEL_RESEARCH = 'claude-opus-4-8';
-const WEB_SEARCH = false; // Disabled by default (Haiku can't do tool-use). Enable only with research=true.
 
 // ── domain knowledge (what makes it "smart") ───────────────────────────────
 const SYSTEM_PROMPT = `You are Hosparent's data assistant. Hosparent is a US hospital
@@ -46,6 +47,11 @@ HOW HOSPARENT PRICING WORKS (use this — don't rediscover it):
 ROUTING:
 - "our data" questions -> use the Postgres tools (get_schema, run_readonly_sql,
   diagnose_price).
+- "the UI/site isn't showing X" or "is it a DB problem or a UI problem" -> use
+  check_live_api to hit the live public API the Replit UI reads, and compare it
+  against run_readonly_sql results. If DB has the data but the live API 404s or
+  returns different data, the live server needs a git pull + restart; if the API
+  returns correct data, the problem is in the Replit UI config.
 - external benchmarks / "why does source X differ from us" -> use the healthcare MCP
   tools (e.g. Turquoise) and/or web_search, then compare against our data.
 - clinical / coverage / provider questions -> web_search or the relevant MCP source.
@@ -286,6 +292,38 @@ const SAFE_FIXES = {
 function buildClientTools(actions) {
   return [
     betaTool({
+      name: 'check_live_api',
+      description:
+        'Fetch a GET endpoint on the LIVE public Hosparent API (what the Replit UI actually sees) and return the JSON. ' +
+        'Use this to diagnose "is it a DB problem or a UI problem": compare what run_readonly_sql finds in Postgres ' +
+        'against what this returns from the live server. Useful paths: /health, /search?q=<cpt or name>, /payers, ' +
+        '/learn/content, /procedure/<id>/prices. A 404 here for an endpoint that exists in server.js means the live ' +
+        'server is running old code and needs a git pull + restart.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: "Endpoint path incl. query string, starting with '/', e.g. '/search?q=45378'" },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+      run: async ({ path }) => {
+        const base = process.env.LIVE_API_BASE || 'https://live.hosparent.com';
+        const p = String(path || '');
+        if (!p.startsWith('/')) return JSON.stringify({ error: "path must start with '/'" });
+        try {
+          const resp = await fetch(base + p, { signal: AbortSignal.timeout(15000) });
+          const text = await resp.text();
+          const body = text.length > 8000 ? text.slice(0, 8000) + '…[truncated]' : text;
+          actions.push({ tool: 'check_live_api', path: p, status: resp.status });
+          return JSON.stringify({ status: resp.status, body });
+        } catch (e) {
+          return JSON.stringify({ error: `live API unreachable: ${e.message}` });
+        }
+      },
+    }),
+
+    betaTool({
       name: 'get_schema',
       description: 'List the public tables and their columns/types. Call this before writing SQL against an unfamiliar table.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -412,8 +450,8 @@ function resetConversation() {
 
 /**
  * Answer a natural-language question.
- * Haiku by default (cheap, DB queries only). Opus on demand for research (web_search, complex analysis).
- * Options: { research: true } → upgrades to Opus + enables web_search.
+ * Sonnet 5 by default (thinks on its own: full tool use + web search). Opus on
+ * demand for the hardest research/analysis. Options: { research: true } → Opus.
  * @returns {Promise<{answer: string, actions_taken: object[], model: string}>}
  */
 async function runAgent(question, options = {}) {
@@ -432,8 +470,9 @@ async function runAgent(question, options = {}) {
     messages: [...conversationHistory, { role: 'user', content: q }],
   };
 
-  // Group B: open web (only for research mode, which is Opus).
-  if (useResearch) params.tools.push({ type: 'web_search_20260209', name: 'web_search' });
+  // Group B: open web. Both Sonnet 5 and Opus support server-side web search,
+  // so the agent can research on his own in every mode.
+  params.tools.push({ type: 'web_search_20260209', name: 'web_search' });
 
   // Group C: healthcare MCP connectors (Turquoise, PubMed, ...), if configured.
   const mcp = mcpServers();
