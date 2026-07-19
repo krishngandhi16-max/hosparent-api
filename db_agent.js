@@ -18,9 +18,14 @@ const { betaTool } = require('@anthropic-ai/sdk/helpers/beta/json-schema');
 
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
 const { assertReadOnlySelect } = require('./sql_guard');
+const llm = require('./llm');
+const perplexity = require('./perplexity');
 
-// Sonnet 5 by default — the office DB guy needs to think on his own (near-Opus
-// agentic quality at ~40% of the cost). Opus for deep research / hardest analysis.
+// Model routing, cheapest-first:
+//   1. If a cheap/free provider is configured (llm.js — Groq/Gemini/DeepSeek/
+//      OpenRouter/Kimi/Ollama), the agent runs there with the SAME tools. On
+//      Groq's free tier this costs $0. Web search comes from Perplexity.
+//   2. Otherwise falls back to Anthropic (Sonnet 5 / Opus for research).
 const MODEL_DEFAULT = 'claude-sonnet-5';
 const MODEL_RESEARCH = 'claude-opus-4-8';
 
@@ -455,13 +460,42 @@ function resetConversation() {
  * @returns {Promise<{answer: string, actions_taken: object[], model: string}>}
  */
 async function runAgent(question, options = {}) {
-  const client = getClient();
   const actions = [];
   const useResearch = options.research === true;
-  const model = useResearch ? MODEL_RESEARCH : MODEL_DEFAULT;
-
-  const tools = buildClientTools(actions);
   const q = String(question || '');
+
+  // ── cheap/free path ───────────────────────────────────────────────────────
+  // Same tools, same system prompt, run on whatever provider llm.js found
+  // (Groq free tier = $0). Pass options.claude=true to force the Anthropic path.
+  if (llm.isConfigured() && options.claude !== true) {
+    const tools = buildClientTools(actions);
+    if (perplexity.isConfigured()) {
+      tools.push({
+        name: 'web_search',
+        description: 'Search the live web (news, competitor prices, weather, anything current). Returns real articles: title, url, snippet, date.',
+        input_schema: {
+          type: 'object',
+          properties: { query: { type: 'string', description: 'What to search for' } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+        run: async ({ query }) => JSON.stringify(await perplexity.search(String(query), { maxResults: 5 })),
+      });
+    }
+    const { text } = await llm.runToolLoop({
+      system: SYSTEM_PROMPT,
+      messages: [...conversationHistory, { role: 'user', content: q }],
+      tools,
+      maxRounds: useResearch ? 16 : 10,
+    });
+    rememberExchange(q, text);
+    return { answer: text, actions_taken: actions, model: llm.describe(), research_mode: useResearch };
+  }
+
+  // ── Anthropic fallback (needs ANTHROPIC_API_KEY + credits) ────────────────
+  const client = getClient();
+  const model = useResearch ? MODEL_RESEARCH : MODEL_DEFAULT;
+  const tools = buildClientTools(actions);
   const params = {
     model,
     max_tokens: 4096,

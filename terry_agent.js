@@ -13,10 +13,13 @@
 
 require('dotenv').config();
 const { pool } = require('./db');
+const llm = require('./llm');
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic = AnthropicPkg.default || AnthropicPkg;
 
-const MODEL = 'claude-haiku-4-5-20251001'; // writing copy from given material — cheap tier is fine
+// Copywriting from given material — the free/cheap provider (llm.js) does this
+// for $0 when configured; Anthropic Haiku is only the fallback.
+const MODEL = 'claude-haiku-4-5-20251001';
 
 const SYSTEM = `You write short social posts (Twitter/X + LinkedIn) for Hosparent, a
 healthcare price-transparency product. Angle: healthcare billing is confusing by design,
@@ -51,16 +54,23 @@ async function ensurePostQueue() {
 }
 
 async function draftPost(story) {
-  const client = getClient();
-  const resp = await client.messages.create({
-    model: MODEL,
-    max_tokens: 400,
-    system: SYSTEM,
-    messages: [{ role: 'user', content: `${story.headline}\n\n${story.summary || ''}\n\nSource: ${story.source || story.url || ''}` }],
-  });
-  const text = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+  const material = `${story.headline}\n\n${story.summary || ''}\n\nSource: ${story.source || story.url || ''}`;
   let post;
-  try { post = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { return null; }
+  if (llm.isConfigured()) {
+    try { post = await llm.chatJSON(material, { system: SYSTEM, bulk: true, maxTokens: 400 }); }
+    catch (_) { return null; }
+  } else {
+    const client = getClient();
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 400,
+      system: SYSTEM,
+      messages: [{ role: 'user', content: material }],
+    });
+    const text = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    try { post = JSON.parse(text.match(/\{[\s\S]*\}/)[0]); } catch (_) { return null; }
+  }
+  if (!post || !post.text) return null;
 
   await ensurePostQueue();
   const r = await pool.query(
