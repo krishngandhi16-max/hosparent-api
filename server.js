@@ -826,7 +826,43 @@ app.get('/search-drugs', async (req, res) => {
          OR dp.ndc ILIKE $3 OR dp.j_code ILIKE $3
       ORDER BY dp.price ASC LIMIT 50
     `, [`%${resolved}%`, `%${q}%`, qLower]);
-    res.json(result.rows);
+    let rows = result.rows;
+
+    // J/Q-code fallback: many injectables (e.g. J1815 insulin) have NO retail
+    // seller — Cost Plus/GoodRx sell by name+NDC, and some drugs they don't sell
+    // at all. For billing-code searches, surface hospital price-file rows in the
+    // same shape so a code search never comes back empty when we DO have data.
+    if (/^[jq]\d{4}$/i.test(qLower)) {
+      const code = qLower.toUpperCase();
+      const hosp = await pool.query(`
+        SELECT p.standard_name AS drug_name, NULL AS brand_name, NULL AS ndc,
+          p.cpt_code AS j_code, NULL AS strength, NULL AS form, NULL AS quantity,
+          h.name AS pharmacy_name, 'Hospital (price file)' AS pharmacy_chain,
+          h.city AS pharmacy_address, NULL AS pharmacy_zip,
+          NULL AS pharmacy_lat, NULL AS pharmacy_lng,
+          pr.price, pr.price_type, 'hospital MRF' AS source, NULL AS source_url,
+          'price from this hospital''s published machine-readable file' AS conditions,
+          NULL AS is_generic
+        FROM procedures p
+        JOIN prices pr ON pr.procedure_id = p.id
+        JOIN hospitals h ON h.id = pr.hospital_id
+        WHERE upper(p.cpt_code) = $1 AND pr.is_suspicious IS NOT TRUE AND pr.price > 0
+        ORDER BY pr.price ASC LIMIT 30
+      `, [code]).catch(() => ({ rows: [] }));
+      const mrf = await pool.query(`
+        SELECT description AS drug_name, NULL AS brand_name, NULL AS ndc,
+          billing_code AS j_code, NULL AS strength, NULL AS form, NULL AS quantity,
+          'Hospital price file' AS pharmacy_name, 'Hospital (MRF)' AS pharmacy_chain,
+          NULL AS pharmacy_address, NULL AS pharmacy_zip,
+          NULL AS pharmacy_lat, NULL AS pharmacy_lng,
+          price, 'negotiated' AS price_type, 'hospital MRF' AS source, NULL AS source_url,
+          NULL AS conditions, NULL AS is_generic
+        FROM mrf_prices WHERE upper(billing_code) = $1 AND price > 0
+        ORDER BY price ASC LIMIT 30
+      `, [code]).catch(() => ({ rows: [] }));
+      rows = rows.concat(hosp.rows, mrf.rows);
+    }
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

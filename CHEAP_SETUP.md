@@ -68,6 +68,20 @@ LLM_MODEL_BULK=...      # override the bulk-tier model
 Total: **$0/month** for normal operation — well under your $30–40 budget, and
 you only ever pay if you deliberately run the giant audit on a paid provider.
 
+## What about Hermes and OpenClaw?
+
+**Hermes (Nous Research)** — open-source models. Their API is NOT free (Hermes 4
+70B ≈ $0.13/M in, $0.40/M out — about the same as Gemini Flash-Lite), and their
+"Hermes Agent" is a harness that still needs a paid model behind it. It gains
+you nothing over Groq's free tier for this stack. Skip.
+
+**OpenClaw** — a self-hosted personal AI assistant you talk to over
+WhatsApp/Discord. The software is free but it's a *front-end*: you still pay
+for whatever model API it calls ($5–$100+/mo in practice), and it comes with
+real security baggage (broad machine access; the Jan 2026 "ClawHavoc" incident
+planted 341 malicious skills in its plugin hub). It doesn't replace anything in
+Hosparent — your office IS already the agent. Skip.
+
 ## Do you even need the big LLM audit?
 
 Right now: **no.** The verify manifest passed **106/106 CPTs** after the SQL
