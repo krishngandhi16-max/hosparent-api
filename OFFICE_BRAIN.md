@@ -123,12 +123,15 @@ NADAC public dataset (data.medicaid.gov) — no partnership needed.
 ## Cash-price scrape targets (researched Jul 2026 — real, verified sites)
 
 DFW area:
-- Texas Institute for Surgery (Dallas, on Texas Health Presbyterian campus)
-  — standard pricing list: texasinstituteforsurgery.com/standard-pricing/
-- NTTC Surgery Center (Mesquite) — flat-rate cash bundle list:
-  nttcsurgerycenter.com/pricelist/flat-rate/  (knee replacement ~$20K vs
-  $30-45K hospital — great comparison content)
-- North Central Surgical Center Hospital (Dallas) — MRF + pricing page.
+- Texas Institute for Surgery (Dallas) — ✅ AUTOMATED: import_cash_centers.js
+  ingests their CMS standardcharges.csv (~8K rows, CPT-coded, gross/cash/
+  negotiated) as a real hospital in the main prices pipeline.
+- NTTC Surgery Center (Mesquite) — ✅ AUTOMATED: import_cash_centers.js
+  scrapes the flat-rate HTML table (~190 all-inclusive bundles) into
+  cash_bundle_prices, served by /search-surgery-bundles as cash_centers.
+  Bundles are all-inclusive (facility+surgeon+anesthesia) — never compare
+  1:1 with facility-only hospital rates.
+- North Central Surgical Center Hospital (Dallas) — MRF + pricing page (todo).
 Texas (non-DFW):
 - Texas Medical Management / Texas Free Market Surgery — bundled prices
   across 6 Texas cities, full list + downloadable price sheet:

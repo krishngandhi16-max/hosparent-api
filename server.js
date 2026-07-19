@@ -890,7 +890,19 @@ app.get('/search-surgery-bundles', async (req, res) => {
       ORDER BY price ASC LIMIT 20
     `, [`%${q}%`, cpts.length ? cpts : ['']]).catch(() => ({ rows: [] }));
 
-    res.json({ sco: sco.rows, mdsave: mdsave.rows });
+    // Cash-price surgery centers (NTTC Mesquite, etc.) — all-inclusive bundles
+    // imported by import_cash_centers.js. Additive key; guarded so a missing
+    // table never breaks the endpoint.
+    const cash = await pool.query(`
+      SELECT procedure_name, cpt_code, all_inclusive_price, includes_description,
+        source_url, provider_name, city, category
+      FROM cash_bundle_prices
+      WHERE procedure_name ILIKE $1 OR category ILIKE $1 OR cpt_code = ANY($2::text[])
+         OR EXISTS (SELECT 1 FROM unnest($2::text[]) c WHERE cpt_code ILIKE '%' || c || '%')
+      ORDER BY all_inclusive_price ASC LIMIT 20
+    `, [`%${q}%`, cpts.length ? cpts : ['']]).catch(() => ({ rows: [] }));
+
+    res.json({ sco: sco.rows, mdsave: mdsave.rows, cash_centers: cash.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

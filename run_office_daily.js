@@ -26,13 +26,14 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 
 const STEPS = [
-  ['1/7 validate prices (flag out-of-bounds)', 'validation_system.js'],
-  ['2/7 recover in-bounds prices (unflag)', 'hoser_unflag.js'],
-  ['3/7 verify manifest (per-CPT PASS/FAIL)', 'verify_all_prices_v2.js'],
-  ['4/7 refresh Cost Plus drug catalog + J-codes', 'import_costplus.js'],
-  ['5/7 refresh Learn base content', 'seed_learn_content.js'],
-  ['6/7 refresh insurance news', 'refresh_insurance_news.js'],
-  ['7/7 Indy research + Hoser approval text', 'run_hoser_daily.js'],
+  ['1/8 refresh cash-price surgery centers (NTTC + TIS)', 'import_cash_centers.js'],
+  ['2/8 refresh Cost Plus drug catalog + J-codes', 'import_costplus.js'],
+  ['3/8 validate prices (flag out-of-bounds)', 'validation_system.js'],
+  ['4/8 recover in-bounds prices (unflag)', 'hoser_unflag.js'],
+  ['5/8 verify manifest (per-CPT PASS/FAIL)', 'verify_all_prices_v2.js'],
+  ['6/8 refresh Learn base content', 'seed_learn_content.js'],
+  ['7/8 refresh insurance news', 'refresh_insurance_news.js'],
+  ['8/8 Indy research + Hoser approval text', 'run_hoser_daily.js'],
 ];
 
 console.log(`\n🏢 HOSPARENT OFFICE DAILY RUN — ${new Date().toISOString()}`);

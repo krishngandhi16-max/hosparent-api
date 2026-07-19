@@ -76,6 +76,9 @@ async function ensureTable() {
   for (const [name, type] of cols) {
     await pool.query(`ALTER TABLE drug_prices ADD COLUMN IF NOT EXISTS ${name} ${type}`).catch(() => {});
   }
+  // The table may predate this script with quantity as INTEGER — we store
+  // patient-friendly pack strings like "30 ea", so widen it to TEXT.
+  await pool.query(`ALTER TABLE drug_prices ALTER COLUMN quantity TYPE TEXT USING quantity::text`).catch(() => {});
 }
 
 async function main() {
