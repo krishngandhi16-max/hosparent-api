@@ -7,11 +7,16 @@
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic = AnthropicPkg.default || AnthropicPkg;
 const { pool, runReadonlySql, ensureBoundsColumns } = require('./db');
+const { assertReadOnlySelect } = require('./sql_guard');
 const { createTask } = require('./tasks');
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const llm = require('./llm');
+const perplexity = require('./perplexity');
 
+// Anthropic fallback only — when a cheap/free provider is configured (llm.js),
+// hoserResearch runs there instead, so server-boot research cycles cost $0.
 const MODEL = 'claude-opus-4-8';
 
 const SYSTEM_PROMPT = `You are **Hoser**, Hosparent's autonomous healthcare finance specialist. Your mission: make Hosparent the DFW #1 price transparency tool by continuously researching, diagnosing, and improving data quality.
@@ -58,6 +63,50 @@ const SYSTEM_PROMPT = `You are **Hoser**, Hosparent's autonomous healthcare fina
 Go autonomous. Report findings daily.`;
 
 async function hoserResearch(question) {
+  // Cheap/free path: same job on the configured provider (Groq free tier = $0),
+  // with a REAL tool loop — SQL actually executes, web search via Perplexity.
+  if (llm.isConfigured()) {
+    try {
+      const tools = [{
+        name: 'run_readonly_sql',
+        description: 'Query the Hosparent Postgres database (single SELECT only) to diagnose pricing issues.',
+        input_schema: {
+          type: 'object',
+          properties: { sql: { type: 'string', description: 'A single SELECT query. No writes.' } },
+          required: ['sql'],
+          additionalProperties: false,
+        },
+        run: async ({ sql }) => {
+          try { return JSON.stringify(await runReadonlySql(assertReadOnlySelect(sql))); }
+          catch (e) { return `SQL error: ${e.message}`; }
+        },
+      }];
+      if (perplexity.isConfigured()) {
+        tools.push({
+          name: 'web_search',
+          description: 'Search the live web (healthcare finance, regulations, competitors, news). Returns real articles.',
+          input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+            additionalProperties: false,
+          },
+          run: async ({ query }) => JSON.stringify(await perplexity.search(String(query), { maxResults: 5 })),
+        });
+      }
+      const { text } = await llm.runToolLoop({
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: String(question || '') }],
+        tools,
+        maxRounds: 8,
+      });
+      return { answer: text, model: llm.describe(), timestamp: new Date().toISOString() };
+    } catch (e) {
+      return { error: e.message, timestamp: new Date().toISOString() };
+    }
+  }
+
+  // Anthropic fallback (needs credits)
   const client = new Anthropic();
 
   const tools = [

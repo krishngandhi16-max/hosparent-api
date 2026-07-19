@@ -20,11 +20,33 @@
 //
 // Run: node import_costplus.js
 require('dotenv').config();
+// Windows Node often fails fetch with a bare "fetch failed" when the host
+// resolves to IPv6 first but the network has no IPv6 route. Prefer IPv4.
+require('dns').setDefaultResultOrder('ipv4first');
 const { pool } = require('./db');
 const { backfillJCodes } = require('./fix_drug_codes');
 
 const API = 'https://us-central1-costplusdrugs-publicapi.cloudfunctions.net/main';
 const SOURCE = 'costplusdrugs.com public API';
+
+// Retry wrapper: the catalog is one big response; transient DNS/TLS hiccups are
+// common on home connections, so try a few times and surface the REAL cause.
+async function fetchCatalog() {
+  let lastErr;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const resp = await fetch(API, { signal: AbortSignal.timeout(120000) });
+      if (!resp.ok) throw new Error(`Cost Plus API HTTP ${resp.status}`);
+      return await resp.json();
+    } catch (e) {
+      lastErr = e;
+      const cause = e.cause ? ` (cause: ${e.cause.code || e.cause.message || e.cause})` : '';
+      console.log(`  attempt ${attempt}/4 failed: ${e.message}${cause}`);
+      if (attempt < 4) await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
+  throw new Error(`could not reach the Cost Plus API after 4 tries: ${lastErr.message}${lastErr.cause ? ` — cause: ${lastErr.cause.code || lastErr.cause.message}` : ''}. Check firewall/antivirus or try again later.`);
+}
 
 function parseMoney(s) {
   const n = parseFloat(String(s || '').replace(/[^0-9.]/g, ''));
@@ -59,9 +81,7 @@ async function ensureTable() {
 async function main() {
   console.log('=== COST PLUS DRUGS FULL-CATALOG IMPORT (official public API) ===\n');
   console.log('Fetching catalog...');
-  const resp = await fetch(API, { signal: AbortSignal.timeout(120000) });
-  if (!resp.ok) throw new Error(`Cost Plus API ${resp.status}`);
-  const data = await resp.json();
+  const data = await fetchCatalog();
   const meds = data.results || data;
   if (!Array.isArray(meds) || meds.length < 100) {
     throw new Error(`unexpected API response (${Array.isArray(meds) ? meds.length : typeof meds} entries) — aborting, existing data untouched`);
