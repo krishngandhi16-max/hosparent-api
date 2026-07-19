@@ -109,3 +109,72 @@ fallback only.
 - Never start an unbounded LLM loop over database rows.
 - Anything that changes data must be reversible and end with the verify
   manifest as the receipt.
+
+## Mission & roadmap (owner context)
+
+Krish is a solo founder, pre-LLC, building Hosparent into the #1 DFW price
+transparency tool and then expanding. Priorities in order: (1) trustworthy
+DFW data (procedures + drugs), (2) clean consumer UI, (3) more colonoscopy
+data, (4) cash-price surgery centers (targets below), (5) LLC formation →
+unlocks the GoodRx API partnership for multi-pharmacy drug prices, (6) Texas-
+wide, then national. Free interim for national drug reference pricing: CMS
+NADAC public dataset (data.medicaid.gov) — no partnership needed.
+
+## Cash-price scrape targets (researched Jul 2026 — real, verified sites)
+
+DFW area:
+- Texas Institute for Surgery (Dallas, on Texas Health Presbyterian campus)
+  — standard pricing list: texasinstituteforsurgery.com/standard-pricing/
+- NTTC Surgery Center (Mesquite) — flat-rate cash bundle list:
+  nttcsurgerycenter.com/pricelist/flat-rate/  (knee replacement ~$20K vs
+  $30-45K hospital — great comparison content)
+- North Central Surgical Center Hospital (Dallas) — MRF + pricing page.
+Texas (non-DFW):
+- Texas Medical Management / Texas Free Market Surgery — bundled prices
+  across 6 Texas cities, full list + downloadable price sheet:
+  texasmedicalmanagement.com/surgery-price-bundles-facilities-full-list/
+- Lonestar Surgery Center (Houston), NW Surgery (Houston, direct-pay).
+Oklahoma:
+- Surgery Center of Oklahoma (already imported as sco_prices — refresh it)
+- Oklahoma Surgical Hospital (Tulsa) — price transparency page.
+Cross-check directories: AAPS cash-friendly surgery list (aapsonline.org),
+MediCostCalc cash-price aggregator, MDsave (already integrated).
+Pattern for each: small scraper → bundle name, CPT when given, all-inclusive
+price, source URL → sco_prices-style table with source attribution. Bundles
+are ALL-INCLUSIVE (surgeon+anesthesia+facility) — label them as such so they
+aren't compared 1:1 against facility-only hospital rates.
+
+## Money & budget playbook (the office IS the budgeter)
+
+When Krish asks ANY money question, answer with: current burn → options
+ranked by ROI → one concrete recommendation. Current burn: LLM $0 (Groq
+free), Perplexity ~$1-3/mo, Replit hosting ~$20-25/mo, domain ~$1/mo,
+tunnel-PC electricity. Total well under $30/mo.
+
+Windfall ranking (e.g. "I found $10K — where does it go?"):
+1. Texas LLC + basics (~$300-800) — unlocks GoodRx and payer partnerships,
+   liability protection. Highest unlock per dollar.
+2. Database hardware: RAM + NVMe for the tunnel PC or a used server
+   (~$600-1,500) — carries Texas-wide data.
+3. Data expansion: scraper time for the targets above + Texas MRFs.
+4. Cloud budget reserve ($100-300/mo Postgres) — only when the PC maxes out.
+5. Marketing LAST — product before promotion.
+
+US expansion estimate (honest math): ~6,100 US hospitals publish MRFs.
+Current: 46 hospitals ≈ 48.6M rows (~1M rows/hospital). Texas (~600
+hospitals) ≈ 600M rows ≈ 0.5-1TB — one beefy Postgres box, ~1-2 months of
+automated MRF ingestion. Full US ≈ 6B+ rows ≈ 5-10TB — needs table
+partitioning + real hardware (~$3-5K server or $200-500/mo cloud), realistic
+solo timeline with office automation: top metros ~6 months, full US 9-15
+months. A $10K budget comfortably covers Texas and starts national.
+
+## Office ↔ Replit (who owns the UI)
+
+The UI (Zip Reality) lives in Replit and the office cannot log into it —
+Replit's connector needs an interactive browser OAuth, which a headless agent
+doesn't have. The bridge: when a fix belongs in the UI, use the
+draft_ui_change_request tool — it writes a complete, ready-to-paste prompt to
+replit_ui/CHANGE_REQUESTS.md, styled to match replit_ui/REDESIGN_BRIEF.md.
+Krish pastes it into the Replit Agent (or Claude applies it via connector in
+chat). Rule of thumb: data/API problems are fixed HERE; look/layout/wording
+problems are drafted as change requests for Replit.

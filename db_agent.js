@@ -71,6 +71,9 @@ ROUTING:
   tools (e.g. Turquoise) and/or web_search, then compare against our data.
 - clinical / coverage / provider questions -> web_search or the relevant MCP source.
 - open-ended (weather, news, definitions) -> web_search.
+- UI look/layout/wording changes -> draft_ui_change_request (the UI lives in the
+  Replit app; the office cannot edit it directly — it drafts a ready-to-paste
+  prompt for the Replit Agent instead).
 Call get_schema before writing SQL against a table you're unsure about.
 
 FIXES:
@@ -337,6 +340,38 @@ function buildClientTools(actions) {
           return JSON.stringify({ status: resp.status, body });
         } catch (e) {
           return JSON.stringify({ error: `live API unreachable: ${e.message}` });
+        }
+      },
+    }),
+
+    betaTool({
+      name: 'draft_ui_change_request',
+      description:
+        'Draft a UI change for the Replit app (Zip Reality). The office cannot edit the UI directly — this writes a complete, ready-to-paste prompt for the Replit Agent into replit_ui/CHANGE_REQUESTS.md. Use for anything about look, layout, wording, or page behavior. Keep the prompt consistent with the design system in replit_ui/REDESIGN_BRIEF.md.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short title of the change, e.g. "Add price-type badges to drug results"' },
+          prompt_for_replit_agent: { type: 'string', description: 'Complete, self-contained instructions for the Replit Agent. Mention which pages/components, exact copy, and that the design system in the app must be preserved.' },
+        },
+        required: ['title', 'prompt_for_replit_agent'],
+        additionalProperties: false,
+      },
+      run: async ({ title, prompt_for_replit_agent }) => {
+        const fs = require('fs');
+        const path = require('path');
+        const dir = path.join(__dirname, 'replit_ui');
+        const file = path.join(dir, 'CHANGE_REQUESTS.md');
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          if (!fs.existsSync(file)) {
+            fs.writeFileSync(file, '# UI change requests for the Replit Agent\n\nPaste the newest entry into the Replit Agent (Zip Reality project) as one message.\n');
+          }
+          fs.appendFileSync(file, `\n\n## ${new Date().toISOString().slice(0, 10)} — ${title}\n\n\`\`\`\n${prompt_for_replit_agent}\n\`\`\`\n`);
+          actions.push({ tool: 'draft_ui_change_request', title });
+          return `Drafted "${title}". Tell the user: paste the newest entry of replit_ui/CHANGE_REQUESTS.md into the Replit Agent to apply it.`;
+        } catch (e) {
+          return `Could not write change request: ${e.message}`;
         }
       },
     }),
