@@ -79,13 +79,18 @@ async function ensureTable() {
   // The table may predate this script with quantity as INTEGER — we store
   // patient-friendly pack strings like "30 ea", so widen it to TEXT.
   await pool.query(`ALTER TABLE drug_prices ALTER COLUMN quantity TYPE TEXT USING quantity::text`).catch(() => {});
-  // The ALTER can fail (e.g. a view depends on the column) — check what the
-  // column actually is and adapt the insert instead of crashing on "30 ea".
+  // Legacy tables can also differ elsewhere (conditions was a text[] ARRAY in
+  // the original scrape). ALTERs can be blocked by dependent views, so read
+  // the ACTUAL column types and adapt the insert instead of crashing.
   const q = await pool.query(`
-    SELECT data_type FROM information_schema.columns
-    WHERE table_name = 'drug_prices' AND column_name = 'quantity'`).catch(() => ({ rows: [] }));
-  const t = (q.rows[0] && q.rows[0].data_type || 'text').toLowerCase();
-  return { quantityIsText: t.includes('text') || t.includes('char') };
+    SELECT column_name, data_type FROM information_schema.columns
+    WHERE table_name = 'drug_prices' AND column_name IN ('quantity', 'conditions')`).catch(() => ({ rows: [] }));
+  const types = Object.fromEntries(q.rows.map((r) => [r.column_name, r.data_type.toLowerCase()]));
+  const qt = types.quantity || 'text';
+  return {
+    quantityIsText: qt.includes('text') || qt.includes('char'),
+    conditionsIsArray: (types.conditions || '').includes('array'),
+  };
 }
 
 async function main() {
@@ -98,8 +103,9 @@ async function main() {
   }
   console.log(`Catalog entries: ${meds.length}`);
 
-  const { quantityIsText } = await ensureTable();
+  const { quantityIsText, conditionsIsArray } = await ensureTable();
   if (!quantityIsText) console.log('note: quantity column is numeric (a view may block widening) — storing pack size as a number.');
+  if (conditionsIsArray) console.log('note: conditions column is an array type — wrapping values accordingly.');
   const client = await pool.connect();
   let inserted = 0;
   try {
@@ -116,6 +122,11 @@ async function main() {
       const quantity = quantityIsText
         ? (m.medispan_pack_size ? `${m.medispan_pack_size} ${m.medispan_pack_size_units || ''}`.trim() : null)
         : (Number.isFinite(packSize) && packSize > 0 ? Math.round(packSize) : null);
+      const conditionsText = m.insurance_eligible === 'Yes'
+        ? 'insurance-eligible; price shown is cash/self-pay per pack, excl. shipping'
+        : 'cash/self-pay per pack, excl. shipping';
+      // node-postgres serializes JS arrays into Postgres array literals
+      const conditions = conditionsIsArray ? [conditionsText] : conditionsText;
       await client.query(
         `INSERT INTO drug_prices
            (drug_name, brand_name, ndc, strength, form, quantity,
@@ -134,7 +145,7 @@ async function main() {
           price,
           SOURCE,
           m.url || null,
-          m.insurance_eligible === 'Yes' ? 'insurance-eligible; price shown is cash/self-pay per pack, excl. shipping' : 'cash/self-pay per pack, excl. shipping',
+          conditions,
           m.brand_generic === 'Generic',
           SOURCE,
         ]
