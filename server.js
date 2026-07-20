@@ -963,6 +963,17 @@ app.post('/learn/calculator', async (req, res) => {
 
 app.get('/learn/how-to-save', (req, res) => res.json(learn.HOW_TO_SAVE_GUIDE));
 
+// Verified numbers for the Learn tab's charts — SQL aggregates over the actual
+// hospital price files, cached 6h. The UI must chart THESE, never hardcoded or
+// model-written numbers, so everything shown is checkable against the database.
+app.get('/learn/stats', async (req, res) => {
+  try {
+    res.json(await learn.getLearnStats());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUBLIC free Learn-tab content (the Replit page reads this). Indy researches + populates
 // learn_content; ?category=lower_price or your_rights, or omit for everything.
 app.get('/learn/content', async (req, res) => {

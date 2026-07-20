@@ -137,7 +137,17 @@ const LEARN_TOPICS = [
 const LEARN_SYSTEM = `You research consumer healthcare-cost topics and produce ONE concise,
 plain-English entry a patient can act on. Use web_search and cite only real, current
 sources (CMS.gov, IRS, state agencies, reputable journalism). Never invent a source or a
-rule. Return JSON only:
+rule.
+
+ACCURACY BAR (this content is shown to clinicians — it must hold up to checking):
+- Every specific number (a dollar amount, percentage, deadline, date) must come from one
+  of your cited sources. If you cannot verify a number, LEAVE IT OUT — an entry with no
+  number is fine; an entry with a wrong number is not.
+- State rules as they are written in the source, including who they apply to and when
+  they do NOT apply. No generalizations beyond what the source says.
+- If sources conflict or a rule is unsettled, say so rather than picking one.
+
+Return JSON only:
 {"body": "2-4 short paragraphs, plain English, actionable", "jurisdiction": "US federal | Texas | ...", "sources": ["url", ...]}`;
 
 // Research one Learn topic. Perplexity when configured (search-grounded with
@@ -172,6 +182,12 @@ async function researchLearnContent(topics = LEARN_TOPICS) {
   for (const t of topics) {
     try {
       const r = await researchOneTopic(t);
+      // Hard accuracy gate: an entry with no real sources never reaches the
+      // public tab. Better a missing entry than an unverifiable one.
+      if (!r.sources || !r.sources.length) {
+        console.error(`[indy] SKIPPED "${t.title}" — research returned no sources, not publishing unverified content.`);
+        continue;
+      }
       await upsertLearnEntry({
         category: t.category,
         title: t.title,

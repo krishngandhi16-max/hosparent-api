@@ -79,6 +79,65 @@ async function calculateSavings({ annual_premium = 0, annual_deductible_paid = 0
   };
 }
 
+// ── verified stats for the Learn tab's charts ───────────────────────────────
+// Every number here is a SQL aggregate over the hospital-published price files
+// already in the database — nothing estimated, nothing model-generated. This is
+// the endpoint the UI charts must read from so what a doctor sees is checkable:
+// same query, same answer, with the source row counts attached.
+const STATS_PROCEDURES = [
+  { cpt: '45378', label: 'Colonoscopy (diagnostic)' },
+  { cpt: '70551', label: 'MRI brain (no contrast)' },
+  { cpt: '74177', label: 'CT abdomen & pelvis (contrast)' },
+  { cpt: '29881', label: 'Knee arthroscopy (meniscectomy)' },
+  { cpt: '85025', label: 'CBC blood test' },
+  { cpt: '80053', label: 'Comprehensive metabolic panel' },
+];
+
+let _statsCache = null; // { at, data } — heavy aggregates over 48M rows; refresh every 6h
+async function getLearnStats() {
+  if (_statsCache && Date.now() - _statsCache.at < 6 * 3600 * 1000) return _statsCache.data;
+
+  const spread = [];
+  for (const { cpt, label } of STATS_PROCEDURES) {
+    const r = await pool.query(`
+      SELECT pr.price_type,
+             MIN(pr.price)::numeric(12,2) AS min,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)::numeric(12,2) AS median,
+             MAX(pr.price)::numeric(12,2) AS max,
+             COUNT(DISTINCT pr.hospital_id)::int AS hospitals,
+             COUNT(*)::int AS price_rows
+      FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
+      WHERE p.cpt_code = $1
+        AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+        AND pr.price_type IN ('cash', 'negotiated', 'gross')
+      GROUP BY pr.price_type`, [cpt]);
+    if (!r.rows.length) continue;
+    const byType = Object.fromEntries(r.rows.map((row) => [row.price_type, {
+      min: Number(row.min), median: Number(row.median), max: Number(row.max),
+      hospitals: row.hospitals, price_rows: row.price_rows,
+    }]));
+    spread.push({ cpt_code: cpt, label, ...byType });
+  }
+
+  const cov = await pool.query(`
+    SELECT (SELECT COUNT(*)::int FROM hospitals) AS hospitals,
+           (SELECT COUNT(*)::int FROM prices WHERE is_suspicious IS NOT TRUE) AS valid_prices,
+           (SELECT COUNT(DISTINCT procedure_id)::int FROM prices) AS procedures,
+           (SELECT MAX(mrf_last_updated)::date::text FROM hospitals) AS last_mrf_refresh`);
+  let drugs = null, bundles = null;
+  try { drugs = (await pool.query(`SELECT COUNT(*)::int AS n FROM drug_prices`)).rows[0].n; } catch (_) {}
+  try { bundles = (await pool.query(`SELECT COUNT(*)::int AS n FROM cash_bundle_prices`)).rows[0].n; } catch (_) {}
+
+  const data = {
+    coverage: { ...cov.rows[0], drug_prices: drugs, cash_bundles: bundles },
+    price_spread: spread,
+    methodology: 'Computed directly from hospital machine-readable files (45 CFR 180) in our database. Min/median/max are across all valid prices of that type; flagged/out-of-bounds prices are excluded. Not estimates.',
+    computed_at: new Date().toISOString(),
+  };
+  _statsCache = { at: Date.now(), data };
+  return data;
+}
+
 const HOW_TO_SAVE_GUIDE = [
   {
     title: 'Ask for the cash/self-pay price, not the "sticker" price',
@@ -102,4 +161,4 @@ const HOW_TO_SAVE_GUIDE = [
   },
 ];
 
-module.exports = { calculateSavings, getInsuranceNews, ensureNewsTable, HOW_TO_SAVE_GUIDE };
+module.exports = { calculateSavings, getInsuranceNews, ensureNewsTable, getLearnStats, HOW_TO_SAVE_GUIDE };

@@ -96,6 +96,40 @@ function describe() {
   return c ? `${c.provider}/${c.model}` : '(not configured)';
 }
 
+// ── free-tier rate limiter ──────────────────────────────────────────────────
+// Groq's free tier caps llama-3.3-70b at 12,000 tokens/minute — and a request
+// "costs" prompt tokens + max_tokens up front. When several agents fired at
+// once (Hoser boot research + health check + /agent questions), each 5-9K-token
+// request collided with the others, every retry re-collided, and everything
+// spent minutes in a 429 loop. All calls now pass through ONE gate: a single
+// request in flight at a time, paced against a sliding 60-second token budget.
+// Requests still all succeed — they just take turns instead of fighting.
+const TPM_BUDGET = Number(process.env.LLM_TPM_BUDGET || 10000); // stay under Groq's 12K with headroom
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const usageLog = []; // { at, tokens } — actual usage reported by the API
+function tokensUsedLastMinute() {
+  const cutoff = Date.now() - 60000;
+  while (usageLog.length && usageLog[0].at < cutoff) usageLog.shift();
+  return usageLog.reduce((s, u) => s + u.tokens, 0);
+}
+
+let queueTail = Promise.resolve();
+function enqueue(fn) {
+  const run = queueTail.then(fn);
+  queueTail = run.then(() => {}, () => {}); // keep the chain alive on errors
+  return run;
+}
+
+async function waitForBudget(estimate) {
+  // Sliding window: wait until this request fits, or the window is empty
+  // (a single oversized request is allowed through when nothing else is live).
+  while (usageLog.length && tokensUsedLastMinute() + estimate > TPM_BUDGET) {
+    const waitMs = Math.max(500, usageLog[0].at + 60000 - Date.now());
+    await sleep(waitMs);
+  }
+}
+
 // Raw chat-completions call with retry on 429/5xx (free tiers rate-limit; we
 // wait and retry instead of dying, so long jobs survive on $0 plans).
 async function chat(messages, opts = {}) {
@@ -110,30 +144,41 @@ async function chat(messages, opts = {}) {
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.tools) { body.tools = opts.tools; body.tool_choice = opts.toolChoice || 'auto'; }
 
-  const maxTries = opts.maxTries || 5;
-  for (let attempt = 1; ; attempt++) {
-    const resp = await fetch(`${c.base}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${c.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(opts.timeoutMs || 120000),
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      const msg = data.choices?.[0]?.message || {};
-      return { text: msg.content || '', toolCalls: msg.tool_calls || [], raw: data, model: data.model || body.model };
+  // ~4 chars/token for the prompt, plus the full max_tokens the API reserves.
+  const estimate = Math.ceil(JSON.stringify(body.messages).length / 4) + body.max_tokens;
+
+  return enqueue(async () => {
+    const maxTries = opts.maxTries || 5;
+    for (let attempt = 1; ; attempt++) {
+      await waitForBudget(estimate);
+      const resp = await fetch(`${c.base}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${c.key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(opts.timeoutMs || 120000),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        usageLog.push({ at: Date.now(), tokens: data.usage?.total_tokens || estimate });
+        const msg = data.choices?.[0]?.message || {};
+        return { text: msg.content || '', toolCalls: msg.tool_calls || [], raw: data, model: data.model || body.model };
+      }
+      const errBody = await resp.text().catch(() => '');
+      const retryable = resp.status === 429 || resp.status >= 500;
+      if (!retryable || attempt >= maxTries) {
+        throw new Error(`${c.provider} API ${resp.status}: ${errBody.slice(0, 300)}`);
+      }
+      // Prefer the provider's own wait hint: Retry-After header, or Groq's
+      // "Please try again in 4.335s" in the error body. Fall back to backoff.
+      const ra = Number(resp.headers.get('retry-after'));
+      const hint = errBody.match(/try again in ([\d.]+)s/i);
+      const waitSec = (Number.isFinite(ra) && ra > 0 && ra)
+        || (hint && parseFloat(hint[1]) + 1)
+        || 5 * 2 ** (attempt - 1);
+      console.log(`  [llm] ${c.provider} ${resp.status} — retrying in ${Math.round(waitSec)}s (attempt ${attempt}/${maxTries})`);
+      await sleep(waitSec * 1000);
     }
-    const errBody = await resp.text().catch(() => '');
-    const retryable = resp.status === 429 || resp.status >= 500;
-    if (!retryable || attempt >= maxTries) {
-      throw new Error(`${c.provider} API ${resp.status}: ${errBody.slice(0, 300)}`);
-    }
-    // Respect Retry-After when present; otherwise exponential backoff 5s→80s.
-    const ra = Number(resp.headers.get('retry-after'));
-    const waitMs = (Number.isFinite(ra) && ra > 0 ? ra : 5 * 2 ** (attempt - 1)) * 1000;
-    console.log(`  [llm] ${c.provider} ${resp.status} — retrying in ${Math.round(waitMs / 1000)}s (attempt ${attempt}/${maxTries})`);
-    await new Promise((r) => setTimeout(r, waitMs));
-  }
+  });
 }
 
 // One-shot prompt → plain text.
@@ -156,7 +201,10 @@ async function chatJSON(prompt, opts = {}) {
  *   { name, description, input_schema, run: async (args) => string }
  * Loops until the model answers in text or maxRounds is hit.
  */
-async function runToolLoop({ system, messages, tools, model, maxRounds = 12, maxTokens = 4096 }) {
+// maxTokens 2048 (not 4096): providers count max_tokens toward the per-minute
+// budget, so a smaller reservation doubles how many tool rounds fit on Groq's
+// 12K-TPM free tier. Answers rarely need more; pass maxTokens to override.
+async function runToolLoop({ system, messages, tools, model, maxRounds = 12, maxTokens = 2048 }) {
   const openaiTools = tools.map((t) => ({
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.input_schema },
