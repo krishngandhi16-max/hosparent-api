@@ -11,7 +11,7 @@ const { ensureNewsTable } = require('./learn');
 
 (async () => {
   try {
-    console.log('Fetching insurance news via Watchdog agent (Opus + web_search)...');
+    console.log('Fetching insurance news (Perplexity when configured; see CHEAP_SETUP.md)...');
     const { stories } = await findInsuranceNews();
     console.log(`Found ${stories.length} stories`);
 

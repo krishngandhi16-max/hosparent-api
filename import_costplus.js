@@ -79,6 +79,13 @@ async function ensureTable() {
   // The table may predate this script with quantity as INTEGER — we store
   // patient-friendly pack strings like "30 ea", so widen it to TEXT.
   await pool.query(`ALTER TABLE drug_prices ALTER COLUMN quantity TYPE TEXT USING quantity::text`).catch(() => {});
+  // The ALTER can fail (e.g. a view depends on the column) — check what the
+  // column actually is and adapt the insert instead of crashing on "30 ea".
+  const q = await pool.query(`
+    SELECT data_type FROM information_schema.columns
+    WHERE table_name = 'drug_prices' AND column_name = 'quantity'`).catch(() => ({ rows: [] }));
+  const t = (q.rows[0] && q.rows[0].data_type || 'text').toLowerCase();
+  return { quantityIsText: t.includes('text') || t.includes('char') };
 }
 
 async function main() {
@@ -91,7 +98,8 @@ async function main() {
   }
   console.log(`Catalog entries: ${meds.length}`);
 
-  await ensureTable();
+  const { quantityIsText } = await ensureTable();
+  if (!quantityIsText) console.log('note: quantity column is numeric (a view may block widening) — storing pack size as a number.');
   const client = await pool.connect();
   let inserted = 0;
   try {
@@ -105,9 +113,9 @@ async function main() {
       const packSize = parseFloat(m.medispan_pack_size);
       // Patient-facing price = one standard pack (e.g. 30 tablets), not one pill.
       const price = Number.isFinite(packSize) && packSize > 0 ? Math.round(unit * packSize * 100) / 100 : unit;
-      const quantity = m.medispan_pack_size
-        ? `${m.medispan_pack_size} ${m.medispan_pack_size_units || ''}`.trim()
-        : null;
+      const quantity = quantityIsText
+        ? (m.medispan_pack_size ? `${m.medispan_pack_size} ${m.medispan_pack_size_units || ''}`.trim() : null)
+        : (Number.isFinite(packSize) && packSize > 0 ? Math.round(packSize) : null);
       await client.query(
         `INSERT INTO drug_prices
            (drug_name, brand_name, ndc, strength, form, quantity,

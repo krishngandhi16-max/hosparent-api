@@ -21,7 +21,11 @@
 require('dotenv').config();
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic = AnthropicPkg.default || AnthropicPkg;
+const perplexity = require('./perplexity');
+const llm = require('./llm');
 
+// Anthropic is the LAST resort — Perplexity (cheap, web-grounded) handles both
+// jobs when PERPLEXITY_API_KEY is set. See CHEAP_SETUP.md.
 const MODEL = 'claude-opus-4-8';
 
 const DISCLAIMER = `\n\n---\n⚠️ **Not legal or medical advice.** This is general information only. Insurance law varies by state and plan type (employer ERISA plans, ACA marketplace, Medicare, and Medicaid all follow different rules), and outcomes depend on your specific facts. For your situation, talk to a licensed attorney, your state Department of Insurance, or a patient advocate. Hosparent is not a law firm and this is not legal representation.`;
@@ -64,6 +68,29 @@ function getClient() {
 }
 
 async function findInsuranceNews() {
+  // Perplexity path: real articles from the Search API (title/url/date are
+  // never hallucinated), dated within the last 60 days only.
+  if (perplexity.isConfigured()) {
+    const results = await perplexity.search(
+      'health insurance claim denial OR prior authorization abuse OR surprise billing lawsuit OR DOJ insurer investigation OR state insurance regulator fine',
+      { maxResults: 10, maxTokensPerPage: 200 }
+    );
+    const cutoff = Date.now() - 60 * 24 * 3600 * 1000;
+    const stories = results
+      .filter((r) => r.url && r.title && r.date && new Date(r.date).getTime() >= cutoff)
+      .slice(0, 8)
+      .map((r) => ({
+        headline: r.title,
+        summary: (r.snippet || '').slice(0, 400),
+        source: (() => { try { return new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { return null; } })(),
+        date: r.date,
+        url: r.url,
+      }));
+    return { stories, fetched_at: new Date().toISOString() };
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('No research backend configured — add PERPLEXITY_API_KEY to .env (see CHEAP_SETUP.md)');
+  }
   const client = getClient();
   const result = await client.beta.messages.toolRunner({
     model: MODEL,
@@ -84,6 +111,24 @@ async function findInsuranceNews() {
 }
 
 async function navigatePatientRights(situation) {
+  // Perplexity path: sonar-pro is web-grounded with citations — right tool for
+  // "which rules apply to my situation" and ~100x cheaper than Opus.
+  if (perplexity.isConfigured()) {
+    const { text } = await perplexity.research(String(situation || '').slice(0, 2000), {
+      system: RIGHTS_SYSTEM_PROMPT,
+      maxTokens: 1200,
+    });
+    return { answer: text + DISCLAIMER, model: 'perplexity/' + (process.env.PERPLEXITY_MODEL || 'sonar-pro') };
+  }
+  // Free-provider fallback (no web grounding, but the federal frameworks are
+  // stable knowledge — still far better than a hard error for the public page).
+  if (llm.isConfigured()) {
+    const text = await llm.chatText(String(situation || '').slice(0, 2000), {
+      system: RIGHTS_SYSTEM_PROMPT + '\nYou have no web access — answer from established federal/state frameworks only, and say rules may have changed.',
+      maxTokens: 1200,
+    });
+    return { answer: text + DISCLAIMER, model: llm.describe() };
+  }
   const client = getClient();
   const result = await client.beta.messages.toolRunner({
     model: MODEL,
