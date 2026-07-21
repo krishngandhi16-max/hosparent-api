@@ -93,6 +93,20 @@ const STATS_PROCEDURES = [
   { cpt: '80053', label: 'Comprehensive metabolic panel' },
 ];
 
+// Always emit cash/negotiated/gross keys (null when that type has no data), so
+// the UI can render every chart without null-checking three separate paths —
+// a missing key was the most likely cause of a Learn-tab render crash.
+const PRICE_TYPES = ['cash', 'negotiated', 'gross'];
+function normalizePriceTypes(rows) {
+  const byType = Object.fromEntries(rows.map((row) => [row.price_type, {
+    min: Number(row.min), median: Number(row.median), max: Number(row.max),
+    hospitals: row.hospitals, price_rows: row.price_rows,
+  }]));
+  const out = {};
+  for (const t of PRICE_TYPES) out[t] = byType[t] || null;
+  return out;
+}
+
 let _statsCache = null; // { at, data } — heavy aggregates over 48M rows; refresh every 6h
 async function getLearnStats() {
   if (_statsCache && Date.now() - _statsCache.at < 6 * 3600 * 1000) return _statsCache.data;
@@ -111,12 +125,7 @@ async function getLearnStats() {
         AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
         AND pr.price_type IN ('cash', 'negotiated', 'gross')
       GROUP BY pr.price_type`, [cpt]);
-    if (!r.rows.length) continue;
-    const byType = Object.fromEntries(r.rows.map((row) => [row.price_type, {
-      min: Number(row.min), median: Number(row.median), max: Number(row.max),
-      hospitals: row.hospitals, price_rows: row.price_rows,
-    }]));
-    spread.push({ cpt_code: cpt, label, ...byType });
+    spread.push({ cpt_code: cpt, label, has_data: r.rows.length > 0, ...normalizePriceTypes(r.rows) });
   }
 
   const cov = await pool.query(`
@@ -237,10 +246,8 @@ async function getPriceBreakdown(cptRaw) {
   const data = {
     cpt_code: cpt,
     procedure_name: proc.rows[0]?.standard_name || null,
-    summary: Object.fromEntries(summary.rows.map((r) => [r.price_type, {
-      min: Number(r.min), median: Number(r.median), max: Number(r.max),
-      hospitals: r.hospitals, price_rows: r.price_rows,
-    }])),
+    has_data: summary.rows.length > 0,
+    summary: normalizePriceTypes(summary.rows),
     by_hospital: byHospital.rows.map((r) => ({
       hospital: r.hospital, city: r.city,
       list_price: r.list_price ? Number(r.list_price) : null,
