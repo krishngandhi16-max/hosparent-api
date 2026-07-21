@@ -974,6 +974,17 @@ app.get('/learn/stats', async (req, res) => {
   }
 });
 
+// Per-CPT breakdown for the interchangeable-CPT chart: list/negotiated/cash
+// per named hospital, DFW-wide spread, CMS Medicare benchmarks, cash bundles.
+// Any CPT or HCPCS code; cached 6h per code.
+app.get('/learn/price-breakdown', async (req, res) => {
+  try {
+    res.json(await learn.getPriceBreakdown(req.query.cpt));
+  } catch (err) {
+    res.status(err.message.includes('cpt must be') ? 400 : 500).json({ error: err.message });
+  }
+});
+
 // PUBLIC free Learn-tab content (the Replit page reads this). Indy researches + populates
 // learn_content; ?category=lower_price or your_rights, or omit for everything.
 app.get('/learn/content', async (req, res) => {

@@ -138,6 +138,127 @@ async function getLearnStats() {
   return data;
 }
 
+// ── per-CPT price breakdown (the interchangeable-CPT chart) ────────────────
+// GET /learn/price-breakdown?cpt=45378 — everything the Learn tab's "one
+// procedure, four prices" chart needs, for ANY CPT code, computed live from
+// the database. The by_hospital rows make the "same hospital" comparison
+// honest: each row is ONE named hospital's own published gross / negotiated /
+// cash prices. Medicare comes from CMS rate tables (ASC + hospital OPPS), not
+// the hospital's file — labeled separately so the chart can say so.
+const _breakdownCache = new Map(); // cpt -> { at, data }, 6h TTL
+
+async function getPriceBreakdown(cptRaw) {
+  const cpt = String(cptRaw || '').trim().toUpperCase();
+  if (!/^[A-Z]?\d{4,5}$/.test(cpt)) throw new Error('cpt must be a 5-digit CPT or HCPCS code, e.g. 45378');
+  const hit = _breakdownCache.get(cpt);
+  if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.data;
+
+  const proc = await pool.query(
+    `SELECT standard_name FROM procedures WHERE cpt_code = $1 ORDER BY id LIMIT 1`, [cpt]);
+
+  // DFW-wide spread per price type (valid prices only — same filter /search uses)
+  const summary = await pool.query(`
+    SELECT pr.price_type,
+           MIN(pr.price)::numeric(12,2) AS min,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)::numeric(12,2) AS median,
+           MAX(pr.price)::numeric(12,2) AS max,
+           COUNT(DISTINCT pr.hospital_id)::int AS hospitals,
+           COUNT(*)::int AS price_rows
+    FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
+    WHERE p.cpt_code = $1
+      AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+      AND pr.price_type IN ('cash', 'negotiated', 'gross')
+    GROUP BY pr.price_type`, [cpt]);
+
+  // Per-hospital rows: one named hospital's own published prices side by side.
+  // Cash = that hospital's discounted-cash rate (lowest if several line items);
+  // negotiated = median across its payer contracts; list = median gross.
+  const byHospital = await pool.query(`
+    SELECT h.name AS hospital, h.city,
+           (percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+              FILTER (WHERE pr.price_type = 'gross'))::numeric(12,2) AS list_price,
+           (percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+              FILTER (WHERE pr.price_type = 'negotiated'))::numeric(12,2) AS negotiated_median,
+           MIN(pr.price) FILTER (WHERE pr.price_type = 'negotiated')::numeric(12,2) AS negotiated_min,
+           MIN(pr.price) FILTER (WHERE pr.price_type = 'cash')::numeric(12,2) AS cash_price,
+           COUNT(*) FILTER (WHERE pr.price_type = 'negotiated')::int AS payer_contracts
+    FROM prices pr
+    JOIN procedures p ON p.id = pr.procedure_id
+    JOIN hospitals h ON h.id = pr.hospital_id
+    WHERE p.cpt_code = $1
+      AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+      AND pr.price_type IN ('cash', 'negotiated', 'gross')
+    GROUP BY h.id, h.name, h.city
+    HAVING COUNT(DISTINCT pr.price_type) >= 2
+    ORDER BY COUNT(DISTINCT pr.price_type) DESC, MIN(pr.price) ASC
+    LIMIT 15`, [cpt]);
+
+  // Medicare benchmarks from CMS rate tables already in the DB (not estimates)
+  let medicare = null;
+  try {
+    const m = await pool.query(`
+      SELECT (percentile_cont(0.5) WITHIN GROUP (ORDER BY asc_medicare_rate)
+                FILTER (WHERE asc_medicare_rate > 0))::numeric(12,2) AS asc_rate,
+             (percentile_cont(0.5) WITHIN GROUP (ORDER BY hospital_opps_rate)
+                FILTER (WHERE hospital_opps_rate > 0))::numeric(12,2) AS hospital_opps_rate
+      FROM asc_prices WHERE cpt_code = $1`, [cpt]);
+    const row = m.rows[0];
+    if (row && (row.asc_rate || row.hospital_opps_rate)) {
+      medicare = {
+        asc_rate: row.asc_rate ? Number(row.asc_rate) : null,
+        hospital_opps_rate: row.hospital_opps_rate ? Number(row.hospital_opps_rate) : null,
+        source: 'CMS Medicare rate tables (ASC / hospital outpatient)',
+      };
+    }
+  } catch (_) {}
+  if (!medicare) {
+    try {
+      const m = await pool.query(`
+        SELECT (percentile_cont(0.5) WITHIN GROUP (ORDER BY medicare_opps_rate)
+                  FILTER (WHERE medicare_opps_rate > 0))::numeric(12,2) AS opps
+        FROM imaging_prices WHERE cpt_code = $1`, [cpt]);
+      if (m.rows[0]?.opps) {
+        medicare = { hospital_opps_rate: Number(m.rows[0].opps), asc_rate: null, source: 'CMS Medicare OPPS rate (imaging)' };
+      }
+    } catch (_) {}
+  }
+
+  // All-inclusive cash bundles (surgeon+anesthesia+facility — different animal,
+  // labeled as such so the chart never compares them to facility-only prices)
+  let bundles = [];
+  try {
+    const b = await pool.query(`
+      SELECT provider_name, city, procedure_name, cpt_code, all_inclusive_price::numeric(12,2), includes_description
+      FROM cash_bundle_prices WHERE cpt_code LIKE '%' || $1 || '%'
+      ORDER BY all_inclusive_price ASC LIMIT 10`, [cpt]);
+    bundles = b.rows.map((r) => ({ ...r, all_inclusive_price: Number(r.all_inclusive_price) }));
+  } catch (_) {}
+
+  const data = {
+    cpt_code: cpt,
+    procedure_name: proc.rows[0]?.standard_name || null,
+    summary: Object.fromEntries(summary.rows.map((r) => [r.price_type, {
+      min: Number(r.min), median: Number(r.median), max: Number(r.max),
+      hospitals: r.hospitals, price_rows: r.price_rows,
+    }])),
+    by_hospital: byHospital.rows.map((r) => ({
+      hospital: r.hospital, city: r.city,
+      list_price: r.list_price ? Number(r.list_price) : null,
+      negotiated_median: r.negotiated_median ? Number(r.negotiated_median) : null,
+      negotiated_min: r.negotiated_min ? Number(r.negotiated_min) : null,
+      cash_price: r.cash_price ? Number(r.cash_price) : null,
+      payer_contracts: r.payer_contracts,
+    })),
+    medicare,
+    cash_bundles: bundles,
+    methodology: 'Hospital prices come from each hospital’s federally required machine-readable file (45 CFR 180); flagged/out-of-bounds prices are excluded. Medicare figures are CMS rate-table benchmarks, not hospital-published. All-inclusive bundles cover facility + surgeon + anesthesia and are not comparable to facility-only prices.',
+    computed_at: new Date().toISOString(),
+  };
+  if (_breakdownCache.size > 200) _breakdownCache.clear();
+  _breakdownCache.set(cpt, { at: Date.now(), data });
+  return data;
+}
+
 const HOW_TO_SAVE_GUIDE = [
   {
     title: 'Ask for the cash/self-pay price, not the "sticker" price',
@@ -161,4 +282,4 @@ const HOW_TO_SAVE_GUIDE = [
   },
 ];
 
-module.exports = { calculateSavings, getInsuranceNews, ensureNewsTable, getLearnStats, HOW_TO_SAVE_GUIDE };
+module.exports = { calculateSavings, getInsuranceNews, ensureNewsTable, getLearnStats, getPriceBreakdown, HOW_TO_SAVE_GUIDE };
