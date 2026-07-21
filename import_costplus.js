@@ -116,15 +116,21 @@ async function main() {
     for (const m of meds) {
       const unit = parseMoney(m.unit_price);
       if (!unit) continue;
-      const packSize = parseFloat(m.medispan_pack_size);
-      // Patient-facing price = one standard pack (e.g. 30 tablets), not one pill.
-      const price = Number.isFinite(packSize) && packSize > 0 ? Math.round(unit * packSize * 100) / 100 : unit;
-      const quantity = quantityIsText
-        ? (m.medispan_pack_size ? `${m.medispan_pack_size} ${m.medispan_pack_size_units || ''}`.trim() : null)
-        : (Number.isFinite(packSize) && packSize > 0 ? Math.round(packSize) : null);
-      const conditionsText = m.insurance_eligible === 'Yes'
-        ? 'insurance-eligible; price shown is cash/self-pay per pack, excl. shipping'
-        : 'cash/self-pay per pack, excl. shipping';
+      // Patient-facing price = a standard 30-unit fill at Cost Plus's ACTUAL
+      // consumer price, using their published model (verified to match their live
+      // quote endpoint to the cent):
+      //   price = quantity × unit_price × 1.15 (15% markup) + $5.00 pharmacy fee
+      // e.g. atorvastatin 10mg: 30×0.007×1.15+5 = $5.24 (their quote: $5.24);
+      //      abacavir/lamivudine: 30×0.963×1.15+5 = $38.22 (their quote: $38.22).
+      // Shipping (~$5) is extra per their terms; the exact total is at m.url.
+      const FILL = 30;
+      const price = Math.round((FILL * unit * 1.15 + 5.0) * 100) / 100;
+      const price90 = Math.round((90 * unit * 1.15 + 5.0) * 100) / 100;
+      const units = m.medispan_pack_size_units || (m.pill_nonpill === 'Pill' ? 'tablets' : 'ea');
+      const quantity = quantityIsText ? `${FILL} ${units}`.trim() : FILL;
+      const conditionsText =
+        `Cost Plus cash price for a 30-unit fill (incl. 15% markup + $5 pharmacy fee, excl. shipping). ` +
+        `90-day supply ≈ $${price90}. Exact price at the link.`;
       // node-postgres serializes JS arrays into Postgres array literals
       const conditions = conditionsIsArray ? [conditionsText] : conditionsText;
       await client.query(

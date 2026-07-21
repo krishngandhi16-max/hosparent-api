@@ -1018,7 +1018,29 @@ app.get('/search-drugs', async (req, res) => {
       `, [code]).catch(() => ({ rows: [] }));
       rows = rows.concat(hosp.rows, mrf.rows);
     }
-    res.json(rows);
+
+    // Pre-format for the frontend (cent-accurate for cheap generics) and flag the
+    // Cost Plus rows so the UI can feature the mail-order pharmacy option. Cost
+    // Plus first, then by price — pharmacies, never hospitals, lead a drug search.
+    const money = (n) => (n == null || !Number.isFinite(Number(n))
+      ? null : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    const out = rows.map((r) => {
+      const isCostPlus = /cost plus/i.test(r.pharmacy_name || '') || /costplus/i.test(r.source || '');
+      return {
+        ...r,
+        is_costplus: isCostPlus,
+        display: {
+          price: money(r.price),
+          quantity: r.quantity || null,
+          pharmacy: r.pharmacy_name || r.pharmacy_chain || null,
+          label: [r.drug_name, r.strength, r.form].filter(Boolean).join(' ').trim() || r.drug_name || null,
+          source: r.source || null,
+          source_url: r.source_url || null,
+        },
+      };
+    });
+    out.sort((a, b) => (b.is_costplus - a.is_costplus) || (Number(a.price) - Number(b.price)));
+    res.json(out);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
