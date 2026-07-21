@@ -93,10 +93,8 @@ const STATS_PROCEDURES = [
   { cpt: '73721', label: 'MRI knee / leg joint (no contrast)' },
   { cpt: '74177', label: 'CT abdomen & pelvis (with contrast)' },
   { cpt: '70450', label: 'CT head (no contrast)' },
-  { cpt: '29881', label: 'Knee arthroscopy (meniscectomy)' },
   { cpt: '29827', label: 'Shoulder arthroscopy (rotator cuff)' },
   { cpt: '66984', label: 'Cataract surgery (one eye)' },
-  { cpt: '47562', label: 'Gallbladder removal (laparoscopic)' },
   { cpt: '85025', label: 'CBC blood test' },
   { cpt: '80053', label: 'Comprehensive metabolic panel' },
   { cpt: '93000', label: 'EKG (electrocardiogram)' },
@@ -164,6 +162,52 @@ function normalizePriceTypes(rows) {
   return out;
 }
 
+// Same per-type bounds validation the main /search uses (server.js
+// PRICE_IS_VALID_PER_TYPE): drops flagged prices AND anything outside the
+// curated per-type window for that CPT. Without this, procedures whose garbage
+// outliers were never flagged (e.g. a $97k "cash" gallbladder) poison the
+// medians. Requires `pr` (prices) and `p` (procedures) in the query's scope.
+const VALID_PRICE_SQL = `
+  (pr.is_suspicious IS NOT TRUE)
+  AND EXISTS (SELECT 1 FROM cpt_price_bounds b WHERE b.cpt_code = p.cpt_code)
+  AND NOT EXISTS (
+    SELECT 1 FROM cpt_price_bounds b
+    WHERE b.cpt_code = p.cpt_code
+    AND (
+      pr.price < CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+                   WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+                   ELSE b.min_cash END
+      OR
+      pr.price > CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+                   WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+                   ELSE b.max_cash END
+    )
+  )`;
+
+// Lenient variant for the "type any CPT" breakdown: applies the bounds window
+// when the CPT HAS curated bounds, but still returns data for codes that don't
+// (most of the 262k procedures) — flagged separately via `validated` so the UI
+// can caveat unbounded codes instead of showing nothing.
+const VALID_PRICE_LENIENT_SQL = `
+  (pr.is_suspicious IS NOT TRUE)
+  AND NOT EXISTS (
+    SELECT 1 FROM cpt_price_bounds b
+    WHERE b.cpt_code = p.cpt_code
+    AND (
+      pr.price < CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+                   WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+                   ELSE b.min_cash END
+      OR
+      pr.price > CASE lower(pr.price_type)
+                   WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+                   WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+                   ELSE b.max_cash END
+    )
+  )`;
+
 let _statsCache = null; // { at, data } — heavy aggregates over 48M rows; refresh every 6h
 async function getLearnStats() {
   if (_statsCache && Date.now() - _statsCache.at < 6 * 3600 * 1000) return _statsCache.data;
@@ -179,8 +223,9 @@ async function getLearnStats() {
              COUNT(*)::int AS price_rows
       FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
       WHERE p.cpt_code = $1
-        AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+        AND pr.price > 5 AND pr.price < 500000
         AND pr.price_type IN ('cash', 'negotiated', 'gross')
+        AND ${VALID_PRICE_SQL}
       GROUP BY pr.price_type`, [cpt]);
     const enriched = enrichSpreadItem({ cpt_code: cpt, label, has_data: r.rows.length > 0, ...normalizePriceTypes(r.rows) });
     if (enriched.low != null && enriched.high != null) spread.push(enriched); // only rows with real cash data — never a blank cell
@@ -246,6 +291,10 @@ async function getPriceBreakdown(cptRaw) {
 
   const proc = await pool.query(
     `SELECT standard_name FROM procedures WHERE cpt_code = $1 ORDER BY id LIMIT 1`, [cpt]);
+  // Does this CPT have curated bounds? If not, prices are shown but flagged as
+  // not-yet-validated so the UI can caveat them (honest > pretty for a clinician).
+  const validated = (await pool.query(
+    `SELECT 1 FROM cpt_price_bounds WHERE cpt_code = $1 LIMIT 1`, [cpt])).rows.length > 0;
 
   // DFW-wide spread per price type (valid prices only — same filter /search uses)
   const summary = await pool.query(`
@@ -257,8 +306,9 @@ async function getPriceBreakdown(cptRaw) {
            COUNT(*)::int AS price_rows
     FROM prices pr JOIN procedures p ON p.id = pr.procedure_id
     WHERE p.cpt_code = $1
-      AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+      AND pr.price > 5 AND pr.price < 500000
       AND pr.price_type IN ('cash', 'negotiated', 'gross')
+      AND ${VALID_PRICE_LENIENT_SQL}
     GROUP BY pr.price_type`, [cpt]);
 
   // Per-hospital rows: one named hospital's own published prices side by side.
@@ -277,8 +327,9 @@ async function getPriceBreakdown(cptRaw) {
     JOIN procedures p ON p.id = pr.procedure_id
     JOIN hospitals h ON h.id = pr.hospital_id
     WHERE p.cpt_code = $1
-      AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
+      AND pr.price > 5 AND pr.price < 500000
       AND pr.price_type IN ('cash', 'negotiated', 'gross')
+      AND ${VALID_PRICE_LENIENT_SQL}
     GROUP BY h.id, h.name, h.city
     HAVING COUNT(DISTINCT pr.price_type) >= 2
     ORDER BY COUNT(DISTINCT pr.price_type) DESC, MIN(pr.price) ASC
@@ -364,6 +415,8 @@ async function getPriceBreakdown(cptRaw) {
     cpt_code: cpt,
     procedure_name: proc.rows[0]?.standard_name || null,
     has_data: summary.rows.length > 0,
+    validated,
+    validated_note: validated ? null : 'This code does not yet have curated price bounds — figures are shown from published files but are not bounds-validated.',
     summary: summaryNorm,
     typical,
     featured_hospital,
