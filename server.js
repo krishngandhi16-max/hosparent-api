@@ -7,6 +7,7 @@ const { initTasksTable, createTask, getActiveTasks, getTask, startTask, complete
 const { recordSearch, getActivity } = require('./activity');
 const learn = require('./learn');
 const learnContent = require('./learn_content');
+const learnReference = require('./learn_reference');
 const watchdog = require('./insurance_watchdog_agent');
 const coordinator = require('./hoser_coordinator');
 const notify = require('./notify');
@@ -990,6 +991,16 @@ app.get('/learn/price-breakdown', async (req, res) => {
 app.get('/learn/content', async (req, res) => {
   try {
     res.json({ content: await learnContent.getLearnContent(req.query.category) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUBLIC structured patient-protection laws & rights (seed_learn_research.js populates
+// learn_reference). Each entry is sourced. ?kind=law|right|tactic, or omit for all.
+app.get('/learn/reference', async (req, res) => {
+  try {
+    res.json({ reference: await learnReference.getReference(req.query.kind) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
