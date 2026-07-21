@@ -569,6 +569,104 @@ app.get('/search', async (req, res) => {
   }
 });
 
+// ── SEARCH SUMMARY (DFW-wide low / MEDIAN / high) ─────────
+// The main /search returns per-hospital rows; the header used to show only the
+// lowest → highest, which reads as "$414" and hides the honest typical price.
+// This returns ONE pre-computed, pre-formatted summary for the same query so the
+// UI can show "low / median / high" without doing any math. Median is taken
+// across hospitals (each hospital's representative valid cash price), so it lines
+// up with the visible table. Non-breaking: separate endpoint, /search unchanged.
+const fmtUSD = (n) =>
+  (n == null || !Number.isFinite(Number(n)) ? null : '$' + Math.round(Number(n)).toLocaleString('en-US'));
+
+app.get('/search-summary', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.json(null);
+
+  const cacheKey = `search-summary:${q.toLowerCase().trim()}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json(cached);
+
+  const cptCodes = resolveCpts(q);
+  let whereClause, params;
+  if (cptCodes.length > 0) {
+    whereClause = `p.cpt_code = ANY($1::text[])`;
+    params = [cptCodes];
+  } else {
+    whereClause = `(p.standard_name ILIKE $1 OR p.display_name ILIKE $1)`;
+    params = [`%${q}%`];
+  }
+
+  try {
+    // Per-hospital representative price per type, then aggregate across hospitals.
+    const result = await pool.query(`
+      WITH hosp AS (
+        SELECT h.id,
+          MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) AS cash_price,
+          MIN(pr.price) FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) AS negotiated_price
+        FROM procedures p
+        JOIN prices pr ON pr.procedure_id = p.id
+        JOIN hospitals h ON h.id = pr.hospital_id
+        WHERE ${whereClause}
+          AND p.standard_name NOT ILIKE '%hchg%'
+          AND pr.price > 5 AND pr.price < 500000
+        GROUP BY h.id
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE cash_price IS NOT NULL) AS hospital_count,
+        MIN(cash_price) AS cash_low,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY cash_price) AS cash_median,
+        MAX(cash_price) AS cash_high,
+        MIN(negotiated_price) AS neg_low,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY negotiated_price) AS neg_median,
+        MAX(negotiated_price) AS neg_high
+      FROM hosp
+    `, params);
+
+    const r = result.rows[0] || {};
+    const low = r.cash_low != null ? parseFloat(r.cash_low) : null;
+    const median = r.cash_median != null ? parseFloat(r.cash_median) : null;
+    const high = r.cash_high != null ? parseFloat(r.cash_high) : null;
+    const ratio = (low && high && low > 0) ? Math.round((high / low) * 10) / 10 : null;
+
+    // Pull a friendly procedure name + the CPT we matched on.
+    const cpt = cptCodes[0] || null;
+    let procedureName = q;
+    if (cpt && BOUNDS[cpt] && BOUNDS[cpt].label) procedureName = BOUNDS[cpt].label;
+
+    const summary = {
+      query: q,
+      cpt_code: cpt,
+      procedure_name: procedureName,
+      hospital_count: r.hospital_count != null ? parseInt(r.hospital_count, 10) : 0,
+      cash: {
+        low, median, high,
+        negotiated_median: r.neg_median != null ? parseFloat(r.neg_median) : null,
+      },
+      spread_ratio: ratio,
+      // Pre-formatted strings — bind directly, never compute in the frontend.
+      display: {
+        low: fmtUSD(low),
+        median: fmtUSD(median),
+        high: fmtUSD(high),
+        negotiated_median: fmtUSD(r.neg_median != null ? parseFloat(r.neg_median) : null),
+        spread_ratio: ratio ? `${ratio}×` : null,
+        // A single honest headline the UI can drop in verbatim.
+        range: (low != null && high != null)
+          ? `${fmtUSD(low)}–${fmtUSD(high)} (typical ${fmtUSD(median)})`
+          : null,
+      },
+      note: 'Median is the honest everyday price; the lowest is a floor most patients will not get. Computed across DFW hospitals from machine-readable files (45 CFR 180).',
+    };
+
+    cacheSet(cacheKey, summary);
+    res.json(summary);
+  } catch (err) {
+    console.error('[/search-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── LIVE ACTIVITY (localhost-only via the privacy guard) ──
 // Feeds the Command Center: recent searches + daily counters for Chester.
 app.get('/activity', (req, res) => res.json(getActivity()));
