@@ -86,12 +86,69 @@ async function calculateSavings({ annual_premium = 0, annual_deductible_paid = 0
 // same query, same answer, with the source row counts attached.
 const STATS_PROCEDURES = [
   { cpt: '45378', label: 'Colonoscopy (diagnostic)' },
+  { cpt: '45380', label: 'Colonoscopy with biopsy' },
+  { cpt: '43239', label: 'Upper GI endoscopy with biopsy' },
   { cpt: '70551', label: 'MRI brain (no contrast)' },
-  { cpt: '74177', label: 'CT abdomen & pelvis (contrast)' },
+  { cpt: '72148', label: 'MRI lumbar spine (no contrast)' },
+  { cpt: '73721', label: 'MRI knee / leg joint (no contrast)' },
+  { cpt: '74177', label: 'CT abdomen & pelvis (with contrast)' },
+  { cpt: '70450', label: 'CT head (no contrast)' },
   { cpt: '29881', label: 'Knee arthroscopy (meniscectomy)' },
+  { cpt: '29827', label: 'Shoulder arthroscopy (rotator cuff)' },
+  { cpt: '66984', label: 'Cataract surgery (one eye)' },
+  { cpt: '47562', label: 'Gallbladder removal (laparoscopic)' },
   { cpt: '85025', label: 'CBC blood test' },
   { cpt: '80053', label: 'Comprehensive metabolic panel' },
+  { cpt: '93000', label: 'EKG (electrocardiogram)' },
+  { cpt: '76700', label: 'Abdominal ultrasound' },
+  { cpt: '59400', label: 'Vaginal delivery (routine)' },
 ];
+
+// Format a number as whole dollars ("$2,774"), or null so the UI shows a real
+// value or an explicit label — never a blank cell or "$NaN".
+const fmtUSD = (n) => (n == null || !Number.isFinite(Number(n)) ? null : '$' + Math.round(Number(n)).toLocaleString('en-US'));
+const round1 = (n) => Math.round(Number(n) * 10) / 10;
+
+// Turn one normalized {cash,negotiated,gross} spread item into flat, pre-computed,
+// pre-formatted fields the charts render directly. The spread (low→high) is CASH
+// vs CASH — same price type, apples to apples — so the "N× more" figure is honest.
+function enrichSpreadItem(item) {
+  const cash = item.cash, neg = item.negotiated, list = item.gross;
+  const low = cash?.min ?? null, median = cash?.median ?? null, high = cash?.max ?? null;
+  const ratio = low && high && low > 0 ? round1(high / low) : null;
+  const savings = low != null && high != null ? Math.round(high - low) : null;
+  const hospitals = Math.max(cash?.hospitals || 0, neg?.hospitals || 0, list?.hospitals || 0) || null;
+  return {
+    ...item,
+    hospitals,
+    // flat cash range (what the spread chart + table bind to)
+    low, median, high,
+    spread_ratio: ratio,
+    spread_ratio_label: ratio ? `${ratio}×` : null,
+    savings,
+    // pre-formatted strings so the frontend never does arithmetic (no NaN)
+    display: {
+      low: fmtUSD(low), median: fmtUSD(median), high: fmtUSD(high),
+      savings: fmtUSD(savings), spread: ratio ? `${ratio}×` : null,
+      cash_median: fmtUSD(cash?.median), negotiated_median: fmtUSD(neg?.median),
+      list_median: fmtUSD(list?.median),
+    },
+    why: ratio
+      ? `The cheapest DFW hospital lists ${fmtUSD(low)} cash for this; the most expensive lists ${fmtUSD(high)} — ${ratio}× more for the identical procedure (same CPT ${item.cpt_code}). What changes is the hospital's pricing power and billing department, not the medicine.`
+      : null,
+  };
+}
+
+// The narrative that pins the spread on the system, not the patient. Static,
+// checkable claims — safe to show a clinician.
+const LEARN_EXPLANATIONS = {
+  why_prices_differ:
+    'Hospitals set their own “chargemaster” list prices with no legal cap, then negotiate secret, wildly different rates with each insurer. A big hospital system with market leverage can charge many times what a leaner competitor down the road charges for the exact same CPT-coded procedure. None of it tracks the cost of care — it tracks billing power. Federal price-transparency law (45 CFR 180) finally forces those numbers into the open, which is the only reason we can show them to you here.',
+  why_cash_can_beat_insurance:
+    'The cash / self-pay price is often lower than the “negotiated” rate your insurer pays — and lower than your deductible. If you haven’t met your deductible, paying cash can cost less than running it through insurance, and it skips the insurer entirely. Hospitals are required to publish this cash price, but not to volunteer it. You have to ask.',
+  who_this_helps:
+    'This isn’t about blaming any one hospital — it’s a system where the same colonoscopy can be $414 or $6,169 in the same metro, and the patient is the only person in the room who wasn’t told. Knowing the number before you schedule is the whole advantage.',
+};
 
 // Always emit cash/negotiated/gross keys (null when that type has no data), so
 // the UI can render every chart without null-checking three separate paths —
@@ -125,8 +182,11 @@ async function getLearnStats() {
         AND pr.is_suspicious IS NOT TRUE AND pr.price > 5 AND pr.price < 500000
         AND pr.price_type IN ('cash', 'negotiated', 'gross')
       GROUP BY pr.price_type`, [cpt]);
-    spread.push({ cpt_code: cpt, label, has_data: r.rows.length > 0, ...normalizePriceTypes(r.rows) });
+    const enriched = enrichSpreadItem({ cpt_code: cpt, label, has_data: r.rows.length > 0, ...normalizePriceTypes(r.rows) });
+    if (enriched.low != null && enriched.high != null) spread.push(enriched); // only rows with real cash data — never a blank cell
   }
+  // Most dramatic spread first — best story for the charts and the table.
+  spread.sort((a, b) => (b.spread_ratio || 0) - (a.spread_ratio || 0));
 
   const cov = await pool.query(`
     SELECT (SELECT COUNT(*)::int FROM hospitals) AS hospitals,
@@ -137,10 +197,32 @@ async function getLearnStats() {
   try { drugs = (await pool.query(`SELECT COUNT(*)::int AS n FROM drug_prices`)).rows[0].n; } catch (_) {}
   try { bundles = (await pool.query(`SELECT COUNT(*)::int AS n FROM cash_bundle_prices`)).rows[0].n; } catch (_) {}
 
+  // Headline numbers for the three big stats at the top of the tab — computed,
+  // formatted, never blank when we have any data.
+  const topSpread = spread[0] || null;
+  const topSavings = spread.slice().sort((a, b) => (b.savings || 0) - (a.savings || 0))[0] || null;
+  const c = cov.rows[0];
+  const headline_stats = {
+    hospitals_tracked: c.hospitals,
+    hospitals_tracked_display: c.hospitals != null ? `${c.hospitals}` : null,
+    total_prices: c.valid_prices,
+    total_prices_display: c.valid_prices != null ? Number(c.valid_prices).toLocaleString('en-US') : null,
+    procedures_tracked: c.procedures,
+    procedures_tracked_display: c.procedures != null ? Number(c.procedures).toLocaleString('en-US') : null,
+    max_spread_ratio: topSpread?.spread_ratio ?? null,
+    max_spread_display: topSpread?.spread_ratio_label ?? null,
+    max_spread_procedure: topSpread?.label ?? null,
+    max_savings: topSavings?.savings ?? null,
+    max_savings_display: topSavings ? fmtUSD(topSavings.savings) : null,
+    max_savings_procedure: topSavings?.label ?? null,
+  };
+
   const data = {
-    coverage: { ...cov.rows[0], drug_prices: drugs, cash_bundles: bundles },
+    coverage: { ...c, drug_prices: drugs, cash_bundles: bundles },
+    headline_stats,
     price_spread: spread,
-    methodology: 'Computed directly from hospital machine-readable files (45 CFR 180) in our database. Min/median/max are across all valid prices of that type; flagged/out-of-bounds prices are excluded. Not estimates.',
+    explanations: LEARN_EXPLANATIONS,
+    methodology: 'Computed directly from hospital machine-readable files (45 CFR 180) in our database. The spread is cash-price low to cash-price high across DFW hospitals (same price type, apples to apples); flagged/out-of-bounds prices are excluded. Not estimates.',
     computed_at: new Date().toISOString(),
   };
   _statsCache = { at: Date.now(), data };
@@ -243,21 +325,52 @@ async function getPriceBreakdown(cptRaw) {
     bundles = b.rows.map((r) => ({ ...r, all_inclusive_price: Number(r.all_inclusive_price) }));
   } catch (_) {}
 
+  const summaryNorm = normalizePriceTypes(summary.rows);
+  const byHospitalRows = byHospital.rows.map((r) => ({
+    hospital: r.hospital, city: r.city,
+    list_price: r.list_price ? Number(r.list_price) : null,
+    negotiated_median: r.negotiated_median ? Number(r.negotiated_median) : null,
+    negotiated_min: r.negotiated_min ? Number(r.negotiated_min) : null,
+    cash_price: r.cash_price ? Number(r.cash_price) : null,
+    payer_contracts: r.payer_contracts,
+  }));
+
+  // DFW-wide "four typical prices" — always populated when the procedure has
+  // data, because it uses the median across ALL hospitals (not one that might
+  // be missing a price type). This is what Chart 1 / Chart 3 should show so
+  // nothing ever renders blank.
+  const medicareRate = medicare ? (medicare.hospital_opps_rate || medicare.asc_rate) : null;
+  const typical = {
+    list: summaryNorm.gross?.median ?? null,
+    negotiated: summaryNorm.negotiated?.median ?? null,
+    cash: summaryNorm.cash?.median ?? null,
+    cash_low: summaryNorm.cash?.min ?? null,
+    medicare: medicareRate,
+    hospitals: summaryNorm.cash?.hospitals ?? summaryNorm.gross?.hospitals ?? null,
+    display: {
+      list: fmtUSD(summaryNorm.gross?.median), negotiated: fmtUSD(summaryNorm.negotiated?.median),
+      cash: fmtUSD(summaryNorm.cash?.median), cash_low: fmtUSD(summaryNorm.cash?.min),
+      medicare: fmtUSD(medicareRate),
+    },
+  };
+
+  // A single named hospital that actually has all three price types, for the
+  // "four prices at [Hospital]" story — never one missing negotiated/list.
+  const featured_hospital = byHospitalRows.find(
+    (h) => h.cash_price != null && h.negotiated_median != null && h.list_price != null
+  ) || byHospitalRows[0] || null;
+
   const data = {
     cpt_code: cpt,
     procedure_name: proc.rows[0]?.standard_name || null,
     has_data: summary.rows.length > 0,
-    summary: normalizePriceTypes(summary.rows),
-    by_hospital: byHospital.rows.map((r) => ({
-      hospital: r.hospital, city: r.city,
-      list_price: r.list_price ? Number(r.list_price) : null,
-      negotiated_median: r.negotiated_median ? Number(r.negotiated_median) : null,
-      negotiated_min: r.negotiated_min ? Number(r.negotiated_min) : null,
-      cash_price: r.cash_price ? Number(r.cash_price) : null,
-      payer_contracts: r.payer_contracts,
-    })),
+    summary: summaryNorm,
+    typical,
+    featured_hospital,
+    by_hospital: byHospitalRows,
     medicare,
     cash_bundles: bundles,
+    explanation: LEARN_EXPLANATIONS.why_prices_differ,
     methodology: 'Hospital prices come from each hospital’s federally required machine-readable file (45 CFR 180); flagged/out-of-bounds prices are excluded. Medicare figures are CMS rate-table benchmarks, not hospital-published. All-inclusive bundles cover facility + surgeon + anesthesia and are not comparable to facility-only prices.',
     computed_at: new Date().toISOString(),
   };
