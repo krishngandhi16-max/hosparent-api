@@ -523,11 +523,13 @@ app.get('/search', async (req, res) => {
         h.is_compliant, h.mrf_last_updated, h.full_address,
         h.hospital_hours, h.google_maps_url, h.latitude, h.longitude,
         h.google_rating, h.google_review_count,
+        -- MIN kept only as the "as low as" floor and for the Lowest-price sort.
         MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as cash_price,
+        MAX(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as max_cash_price,
         MIN(pr.price) FILTER (WHERE pr.price_type = 'gross' AND ${PRICE_IS_VALID_SQL}) as gross_price,
         MIN(pr.price) FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) as negotiated_price,
-        -- Representative (median) prices, so the UI can show a typical price
-        -- comparable to competitors' medians instead of only the MIN floor.
+        -- The HEADLINE number is the MEDIAN, not the MIN floor: showing only the
+        -- lowest cash price is misleading. median_cash_price is what the UI shows.
         percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
           FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) as median_cash_price,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
@@ -556,13 +558,40 @@ app.get('/search', async (req, res) => {
         OR COUNT(DISTINCT pr.payer_name) FILTER (
           WHERE pr.payer_name IS NOT NULL AND ${PRICE_IS_VALID_SQL}
         ) > 0
-      ORDER BY cash_price ASC NULLS LAST
+      ORDER BY median_cash_price ASC NULLS LAST, cash_price ASC NULLS LAST
       LIMIT 200
     `, params);
 
-    cacheSet(cacheKey, result.rows);
-    recordSearch(q, result.rows);
-    res.json(result.rows);
+    // Post-process: the headline price per hospital is the MEDIAN cash price
+    // (typical), with the MIN kept only as an "as low as" floor. Every number is
+    // pre-formatted here so the frontend never does price math.
+    const rows = result.rows.map((r) => {
+      const medCash = r.median_cash_price != null ? parseFloat(r.median_cash_price) : null;
+      const minCash = r.cash_price != null ? parseFloat(r.cash_price) : null;
+      const maxCash = r.max_cash_price != null ? parseFloat(r.max_cash_price) : null;
+      const medNeg = r.median_negotiated_price != null ? parseFloat(r.median_negotiated_price) : null;
+      return {
+        ...r,
+        cash_price_median: medCash,   // the honest, typical cash price → show this
+        cash_price_low: minCash,      // floor, for "as low as"
+        cash_price_high: maxCash,
+        display: {
+          // Bind the row's price to display.cash — it is the MEDIAN, not the floor.
+          cash: fmtUSD(medCash),
+          cash_low: fmtUSD(minCash),
+          cash_high: fmtUSD(maxCash),
+          negotiated: fmtUSD(medNeg),
+          // Ready-made headline; only mentions the floor when it differs from median.
+          cash_headline: (medCash != null && minCash != null && maxCash != null && maxCash > minCash)
+            ? `${fmtUSD(medCash)} typical · as low as ${fmtUSD(minCash)}`
+            : fmtUSD(medCash),
+        },
+      };
+    });
+
+    cacheSet(cacheKey, rows);
+    recordSearch(q, rows);
+    res.json(rows);
   } catch (err) {
     console.error('[/search]', err.message);
     res.status(500).json({ error: err.message });
@@ -602,8 +631,12 @@ app.get('/search-summary', async (req, res) => {
     const result = await pool.query(`
       WITH hosp AS (
         SELECT h.id,
-          MIN(pr.price) FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) AS cash_price,
-          MIN(pr.price) FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) AS negotiated_price
+          -- Each hospital contributes its MEDIAN cash/negotiated price (its typical
+          -- price), not its floor — so the DFW low/median/high is medians-of-medians.
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+            FILTER (WHERE pr.price_type = 'cash' AND ${PRICE_IS_VALID_SQL}) AS cash_price,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY pr.price)
+            FILTER (WHERE pr.price_type = 'negotiated' AND ${PRICE_IS_VALID_SQL}) AS negotiated_price
         FROM procedures p
         JOIN prices pr ON pr.procedure_id = p.id
         JOIN hospitals h ON h.id = pr.hospital_id
