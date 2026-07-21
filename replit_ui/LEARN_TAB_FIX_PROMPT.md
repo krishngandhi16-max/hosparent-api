@@ -118,3 +118,44 @@ response has `validated: false`, show a small caption using its `validated_note`
 
 When done, list every file you changed and confirm no chart still shows NaN or a
 blank cell.
+
+## Fix 8 — the "Your rights / laws" section (make it DB-driven and expand it)
+
+There is now a real, sourced dataset of patient-protection laws. Replace any
+hardcoded law cards with data from `GET /learn/reference`. It returns:
+
+```
+{ "reference": [
+  { "kind": "law",                       // "law" | "right"
+    "title": "Hospital Price Transparency Rule",
+    "jurisdiction": "US federal",        // or "Texas"
+    "effective_date": "January 1, 2021",
+    "citation": "45 CFR 180",
+    "penalty": "Civil monetary penalties up to roughly $2M ...",  // may be null
+    "summary": "Every hospital in the U.S. must publicly post ...",
+    "detail": "This is the rule Hosparent is built on ...",
+    "bullets": ["...", "...", "..."],
+    "action": "Before you schedule anything non-emergency, look up ...",
+    "sources": [ { "title": "CMS — Hospital Price Transparency", "url": "https://..." } ]
+  }, ... ] }
+```
+
+There are currently **9 entries** (7 federal laws/rights + 2 Texas laws). Render
+them as a card list in the "Your rights" / "laws" area:
+
+- Card header: `title`, with small pills for `jurisdiction` and `effective_date`.
+- `summary` as the lead sentence (bold/larger).
+- `bullets` as a checklist.
+- A highlighted "How to use it" block from `action` — this is the point of the
+  whole section: turning each law into something the patient can DO.
+- `citation` and `penalty` in small secondary text (skip penalty if null).
+- A "Sources" row: render each `sources[].title` as a link to `sources[].url`,
+  opening in a new tab. Every card must show its sources — that's what makes this
+  credible to a clinician.
+
+Add a filter/toggle for "Federal" vs "Texas" using `jurisdiction`, and optionally
+group `kind: "law"` vs `kind: "right"`. Keep the existing clean card styling.
+
+These are real, government-sourced facts — render them exactly as returned, do not
+paraphrase the numbers or dates. When done, confirm the section lists all 9 entries
+with working source links.
