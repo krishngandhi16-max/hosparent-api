@@ -1,131 +1,122 @@
 # UI change requests (paste into the Replit Agent)
 
 The office drafts UI changes here because it cannot edit the Replit app
-directly. Paste each block below into the Replit Agent as one message, in
-order. Delete a block once it has been applied.
+directly. Paste each block into the Replit Agent as one message. Delete a block
+once applied.
+
+**IMPORTANT — the API base must be `https://live.hosparent.com`** (not
+`api.hosparent.com`, which has no tunnel route and 404s). Set `API_BASE` /
+`VITE_API_BASE` = `https://live.hosparent.com` and redeploy, or the site shows
+demo data.
 
 ---
 
-## 1. URGENT — fix the blank/white screen on the Learn tab
+## 1. Learn tab — bind every chart to the new pre-computed fields (fixes NaN×, blanks, and the misleading single "lowest price")
 
 Paste this into the Replit Agent:
 
-> The Learn tab renders a blank white screen — a component is throwing during
-> render and taking the whole app down. Fix it in two ways:
+> The Learn tab is showing `NaN×`, blank cells, and "not published" for prices
+> that actually exist, because it does arithmetic on the API's nested fields.
+> The backend now returns flat, pre-computed, pre-formatted fields — bind
+> directly to these and never compute prices in the frontend.
 >
-> 1. Add a React error boundary that wraps the page routes (a class component
->    with componentDidCatch / getDerivedStateFromError). When a child throws,
->    it shows a small "Something went wrong on this page. Reload." card with a
->    reload button — it must NEVER blank the entire app. This is the safety net
->    so a single bad value can never white-screen the site again.
+> **API base:** `https://live.hosparent.com`. Refetch `GET /learn/stats` and
+> `GET /learn/price-breakdown?cpt=CODE`.
 >
-> 2. Fix the actual crash: the Learn tab reads price data that can be null.
->    The backend endpoints (/learn/stats and /learn/price-breakdown) now always
->    return the keys `cash`, `negotiated`, and `gross`, but any of the three can
->    be `null` when that procedure has no price of that type. Anywhere the code
->    does something like `summary.negotiated.median` or `.toLocaleString()` /
->    `.toFixed()` on a price, guard it: use optional chaining
->    (`summary.negotiated?.median`), skip or render "not published" when the
->    value is null, and never call a number method on null/undefined. Also
->    check `has_data` on each price-breakdown / price_spread item and render an
->    empty state when it is false. Guard every `.map()` with `(arr ?? [])` and
->    handle a non-OK fetch response (show the error state, don't destructure
->    undefined).
+> **`/learn/stats` now returns:**
+> ```
+> {
+>   "coverage": { "hospitals", "valid_prices", "procedures", "last_mrf_refresh", "drug_prices", "cash_bundles" },
+>   "headline_stats": {
+>     "hospitals_tracked_display": "47",
+>     "total_prices_display": "48,499,158",
+>     "max_spread_display": "37.3×", "max_spread_procedure": "Comprehensive metabolic panel",
+>     "max_savings_display": "$38,406", "max_savings_procedure": "Knee arthroscopy (meniscectomy)"
+>   },
+>   "price_spread": [
+>     { "cpt_code": "80053", "label": "Comprehensive metabolic panel",
+>       "hospitals": 40,
+>       "low": 10, "median": 348, "high": 392,
+>       "spread_ratio": 37.3, "spread_ratio_label": "37.3×", "savings": 381,
+>       "display": { "low": "$10", "median": "$348", "high": "$392", "savings": "$381", "spread": "37.3×",
+>                    "cash_median": "$348", "negotiated_median": "$…", "list_median": "$…" },
+>       "why": "The cheapest DFW hospital lists $10 cash for this; the most expensive lists $392 — 37.3× more …",
+>       "cash": { "min", "median", "max", "hospitals", "price_rows" },
+>       "negotiated": { … or null }, "gross": { … or null } }
+>   ],
+>   "explanations": { "why_prices_differ": "…", "why_cash_can_beat_insurance": "…", "who_this_helps": "…" },
+>   "methodology": "…", "computed_at": "…"
+> }
+> ```
 >
-> After the fix, load the Learn tab with a CPT that has partial data and
-> confirm it renders instead of blanking. List every file you changed.
+> Wire it up:
+> 1. **Three top stats** (currently blank "—"): use `headline_stats` —
+>    `hospitals_tracked_display` ("DFW hospitals tracked"),
+>    `max_spread_display` + `max_spread_procedure` ("max price spread"),
+>    `max_savings_display` + `max_savings_procedure` ("potential savings on a
+>    single procedure"). Render the display strings verbatim — do not recompute.
+> 2. **"Price spread across DFW hospitals" chart** (currently `NaN×`): map over
+>    `price_spread`. For each row show `display.low` (green, cheapest),
+>    `display.high` (red, most expensive), and `spread_ratio_label` for the "N×".
+>    Never compute `high/low` yourself — use `spread_ratio_label`.
+> 3. **Show low / median / high, not just lowest.** For every procedure render
+>    all three: `display.low`, `display.median`, `display.high`. Label them
+>    "cheapest / typical / most expensive". The median is the honest "typical"
+>    number; the lowest is a floor most people won't get.
+> 4. **The "why" line.** Under each spread row (or on hover) show that row's
+>    `why` string. Add an intro paragraph from `explanations.why_prices_differ`
+>    at the top of the spread section — this is the "it's the system, not you"
+>    framing the page should lead with.
+> 5. **"Common procedures & price ranges" table** (currently "--"): one row per
+>    `price_spread` item — `cpt_code`, `label`, `display.low` (Low),
+>    `display.spread` (Spread), `display.high` (High). Clicking a code runs a
+>    live search for that CPT.
+> 6. If `price_spread` is empty, show one honest empty state — but it won't be;
+>    every row returned already has real data.
+>
+> **`/learn/price-breakdown?cpt=CODE` now returns** `typical` and
+> `featured_hospital` — use these so Chart 1 and Chart 3 never show blanks:
+> ```
+> { "cpt_code", "procedure_name",
+>   "typical": { "list", "negotiated", "cash", "cash_low", "medicare",
+>                "display": { "list": "$5,548", "negotiated": "$876", "cash": "$2,774",
+>                             "cash_low": "$414", "medicare": "$…" } },
+>   "featured_hospital": { "hospital", "city", "list_price", "negotiated_median", "cash_price", "payer_contracts" },
+>   "summary": { "cash", "negotiated", "gross" },
+>   "by_hospital": [ … ], "medicare": {…}|null, "cash_bundles": [ … ],
+>   "explanation": "…", "methodology": "…" }
+> ```
+> 7. **Chart 1 "One procedure, four prices"** and **Chart 3 "How a bill gets
+>    calculated"**: use `typical.display` for the four bars — `list`,
+>    `negotiated`, `cash`, `medicare`. These are DFW-wide medians across all
+>    hospitals, so negotiated and list are always present (no more "not
+>    published by ."). Show `procedure_name`. If you want to name a hospital,
+>    use `featured_hospital.hospital` (it's chosen to have all price types) —
+>    and only show a field for it that is non-null; otherwise fall back to
+>    `typical`. Label Medicare "CMS benchmark, not a hospital price".
+> 8. Never print a bare CPT/hospital placeholder like "(CPT ) at ,". If a value
+>    is null, either use the `typical` fallback or omit that clause entirely.
+>
+> Keep the clean visuals and the existing sections (laws, six steps, FAQ). Keep
+> the "Computed from … 45 CFR 180 · updated {computed_at}" caption. List every
+> file you changed.
 
 ---
 
-## 2. Search results — make it feel like Kayak/Amazon, and stop leading with a misleading "lowest price"
+## 2. Search results — Kayak/Amazon cards, range not just "lowest"
 
-Paste this into the Replit Agent:
+(unchanged from before — apply after #1)
 
-> Redesign the search results from a spreadsheet-style table into a ranked list
-> of result cards, like Kayak or Amazon. Keep all existing data and API calls
-> (`GET /search?q=...`) — this is a presentation change that surfaces MORE of
-> the data we already return, not fewer.
->
-> **The core problem to fix:** we currently headline a single "lowest price."
-> That number is the single cheapest cash line item anywhere — a floor most
-> patients will not actually get — so it is misleading. Replace it with a
-> range anchored on a typical price.
->
-> The `/search` response already includes, per hospital row: `hospital_name`,
-> `city`, `cash_price` (lowest cash), `median_cash_price` (typical cash),
-> `negotiated_price` (lowest negotiated), `median_negotiated_price`,
-> `gross_price` (list price), `payer_count`, `medicare_facility_rate`,
-> `medicare_non_facility_rate`, `leapfrog_grade`, `cms_rating` (1–5 stars),
-> `google_rating`, `google_review_count`, `hospital_phone`, `full_address`,
-> `google_maps_url`, `latitude`, `longitude`, `is_compliant`,
-> `mrf_last_updated`, `procedure_variant_count`, `cpt_code`, `standard_name`.
->
-> **At the top of results — a summary band (not a single number):**
-> - "Cash price across N hospitals: as low as ${min} · typically ~${median} ·
->    up to ${max}". Compute min/median/max across the returned rows' cash
->    prices. The word "typically" uses the median, shown most prominently.
-> - A one-line Medicare anchor when available: "Medicare pays about ${rate}
->    for this" so people have a reference point.
-> - Small caption: "Lowest = the single cheapest listed cash price; you may not
->    qualify for it. Typical = the median across hospitals."
->
-> **Each result as a card (sorted cheapest cash first), showing many metrics
-> without clutter:**
-> - Hospital name + city, and distance if we can compute it from lat/long vs
->   the user (optional; skip if no user location).
-> - The price block: that hospital's cash price as the headline, with a price
->   type badge ("cash / self-pay"). Below it in smaller text: negotiated
->   (insurance) price and list price when present, each badged. If a value is
->   null, show "not published" rather than $0 or blank.
-> - Trust/quality chips: CMS star rating (render as stars), Leapfrog safety
->   grade, Google rating + review count, and `payer_count` as "N insurance
->   rates published". A "prices verified {mrf_last_updated}" freshness line.
-> - Actions: call button (hospital_phone), directions (google_maps_url).
-> - The single cheapest card gets a subtle "lowest listed" tag — muted, not a
->   giant green banner — and only that card.
->
-> **Sort/filter bar like Kayak:** sort by cash price, by typical (median)
-> price, by CMS rating, by Google rating. A toggle to show list/negotiated
-> prices. Keep it one row, calm, sentence case.
->
-> **Integrity guardrails (do not break these):**
-> - Never invent a number. If a field is null, say "not published".
-> - Never present the lowest price as "the price" — always pair it with the
->   typical/median and the source count.
-> - Keep the price-type badge on every price so cash, negotiated, and list are
->   never confused for each other.
-> - Keep a source + freshness line on every card.
->
-> Match the existing design system (fonts, teal primary, cards). Responsive:
-> cards stack on mobile, the summary band never overflows. List every file you
-> changed.
-
----
-
-## 3. Learn tab charts must read /learn/stats and /learn/price-breakdown (no hardcoded numbers)
-
-Paste this into the Replit Agent (if not already applied):
-
-> Every number and chart on the Learn tab must come from the API, never
-> hardcoded. Use `GET /learn/price-breakdown?cpt=CODE` for the interchangeable
-> per-CPT chart and `GET /learn/stats` for overview stats. Response shapes:
->
-> - price-breakdown: `{ cpt_code, procedure_name, has_data, summary: { cash,
->   negotiated, gross }, by_hospital: [{ hospital, city, list_price,
->   negotiated_median, negotiated_min, cash_price, payer_contracts }],
->   medicare: { asc_rate, hospital_opps_rate, source } | null, cash_bundles,
->   methodology, computed_at }`. Each `summary` key is either
->   `{ min, median, max, hospitals, price_rows }` or `null`.
-> - stats: `{ coverage: { hospitals, valid_prices, procedures,
->   last_mrf_refresh, drug_prices, cash_bundles }, price_spread: [{ cpt_code,
->   label, has_data, cash, negotiated, gross }], methodology, computed_at }`.
->
-> For the "one procedure, four prices at the same hospital" chart, use a single
-> entry from `by_hospital` and show that hospital's real name — never mix
-> prices from different hospitals as if they were one. Show the Medicare figure
-> labeled as a CMS benchmark rate, not a hospital-published price. Under each
-> chart, caption: "Computed from hospital machine-readable price files
-> (45 CFR 180) · refreshed {computed_at date}". While loading show skeletons;
-> on error show a retry button; never fall back to invented numbers. Delete
-> every hardcoded price/percentage/statistic, including the old colonoscopy
-> example (2500/1420/600/414). List every hardcoded number you removed.
+> Redesign search results from a spreadsheet table into ranked result cards like
+> Kayak/Amazon, using the data `GET /search?q=...` already returns. Replace the
+> single "lowest price" headline with a range: a summary band reading "as low as
+> ${min} · typically ~${median} · up to ${max} across N hospitals" (median most
+> prominent), plus a Medicare reference line. Each hospital is a card showing its
+> cash price (headline, badged "cash / self-pay"), negotiated and list prices
+> when present (badged; "not published" when null), CMS stars (`cms_rating`),
+> Leapfrog grade, Google rating + review count, `payer_count` as "N insurance
+> rates published", a "verified {mrf_last_updated}" line, and call/directions
+> buttons. Only the single cheapest card gets a muted "lowest listed" tag. Sort
+> bar: cash price / typical (median) / rating. Never present the lowest as "the
+> price"; always pair it with the typical/median and source count. Match the
+> existing design system. List every file you changed.
