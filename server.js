@@ -237,6 +237,27 @@ const PRICE_IS_VALID_PER_TYPE = `
   )
 `;
 
+// STRICT bounds-gate: a price is valid ONLY IF its CPT HAS a bounds row and the
+// price is inside that row's per-type window. Codes with no bounds (non-CPT junk
+// like DRG 231/207, or codes we haven't validated) are hidden entirely. Enabled
+// only when STRICT_BOUNDS_GATE=true AND bounds exist — otherwise it would blank
+// the whole catalog. Run generate_cpt_bounds.js first so real CPTs are covered.
+const PRICE_IS_VALID_STRICT = `
+  (pr.is_suspicious IS NOT TRUE)
+  AND EXISTS (
+    SELECT 1 FROM cpt_price_bounds b
+    WHERE b.cpt_code = p.cpt_code
+    AND pr.price >= CASE lower(pr.price_type)
+                      WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+                      WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+                      ELSE b.min_cash END
+    AND pr.price <= CASE lower(pr.price_type)
+                      WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+                      WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+                      ELSE b.max_cash END
+  )
+`;
+
 // "This price is outside its price_type's bounds" — for the diagnostic endpoints,
 // which JOIN cpt_price_bounds as `b`. Mirrors PRICE_IS_VALID_PER_TYPE's window.
 const OUT_OF_TYPE_BOUNDS_SQL = `(
@@ -271,8 +292,11 @@ async function loadBounds() {
       };
     }
     BOUNDS = next;
-    PRICE_IS_VALID_SQL = PRICE_IS_VALID_PER_TYPE; // upgrade once columns confirmed present
-    console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded (per-type)`);
+    // Strict gate only when explicitly enabled AND bounds actually exist — never
+    // blank the catalog because the table happens to be empty.
+    const wantStrict = process.env.STRICT_BOUNDS_GATE === 'true' && Object.keys(BOUNDS).length > 0;
+    PRICE_IS_VALID_SQL = wantStrict ? PRICE_IS_VALID_STRICT : PRICE_IS_VALID_PER_TYPE;
+    console.log(`[bounds] ${Object.keys(BOUNDS).length} CPT bounds loaded (${wantStrict ? 'STRICT gate: unbounded codes hidden' : 'per-type'})`);
   } catch (e) { console.error('[bounds]', e.message); }
 }
 loadBounds();
