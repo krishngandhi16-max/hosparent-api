@@ -1183,6 +1183,17 @@ app.get('/learn/reference', async (req, res) => {
   }
 });
 
+// Court decisions the office agent researched and saved (each carries a real
+// source_url — see court_decisions.js). Read-only.
+app.get('/learn/court-decisions', async (req, res) => {
+  try {
+    const { getDecisions } = require('./court_decisions');
+    res.json({ decisions: await getDecisions() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/learn/insurance-news', async (req, res) => {
   try {
     res.json({ stories: await learn.getInsuranceNews() });

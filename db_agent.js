@@ -128,10 +128,32 @@ ROUTING:
   prompt for the Replit Agent instead).
 Call get_schema before writing SQL against a table you're unsure about.
 
+RESEARCH-AND-SAVE (e.g. "find all the info you can on court decisions and put it in the DB"):
+This is a research + write task — do it end to end, don't ask the user to gather anything.
+1. FIND real items with your research tools. For court decisions relevant to Hosparent,
+   search hospital price transparency, the No Surprises Act, surprise/balance billing,
+   medical-debt collection, ACA §2713/§2719, and 45 CFR 180 enforcement. Use web_search
+   to find candidates and fetch_url to open a primary source for each (CourtListener
+   e.g. https://www.courtlistener.com/api/rest/v4/search/?q=..., Justia, the court's own
+   opinion page, Supreme Court slip opinions, CMS pages).
+2. GROUND EVERY ITEM. You MUST have fetched a real source URL that confirms the case
+   exists before you save it. NEVER invent or guess a case name, citation, court, date,
+   or holding — fabricated case law is a serious, disqualifying error. If you cannot
+   confirm a case at a real source, DO NOT include it. When unsure, leave it out.
+3. For each confirmed case build: { case_name, court, decision_date, citation, docket,
+   holding (what the court ruled), significance (why it matters to patients / price
+   transparency), source_title, source_url, verified:true }.
+4. SAVE via apply_safe_fix name "add_court_decisions", params { decisions:[ ... ] }.
+   The tool REFUSES any entry without a real source_url — that's the backstop, not a
+   substitute for you verifying. Re-runs upsert (no duplicates).
+5. Report exactly how many you saved, how many were refused and why, and list each saved
+   case with its source link so a human can spot-check. Never pad the count with
+   unverifiable cases.
+
 FIXES:
 - You may auto-apply ONLY the whitelisted safe fixes via apply_safe_fix
   (rerun_validation, clear_stale_flags, unflag_prices_with_validation, add_drug_prices,
-  recode_procedure_cpt). These are idempotent and reversible.
+  recode_procedure_cpt, add_court_decisions). These are idempotent and reversible.
 - CPT mapping bugs: multiple procedures rows can share one CPT code with different
   standard_name/display_name text (e.g. "Colonoscopy Screening" and "Colonoscopy with
   Biopsy" both tagged 45378, when biopsy is properly 45380). This makes /search results
@@ -358,6 +380,27 @@ const SAFE_FIXES = {
       old_cpt_code: before.rows[0].cpt_code,
       new_cpt_code: String(new_cpt_code),
     };
+  },
+
+  // Save researched COURT DECISIONS to the isolated court_decisions table. This is
+  // the "research X and put it in the DB" write path. It is safe because it only
+  // writes to a dedicated table (never prices/procedures) and it REFUSES any entry
+  // without a real source_url — the hard backstop against fabricated case law.
+  // params: { decisions: [{ case_name, court, decision_date, citation, docket,
+  //           holding, significance, source_title, source_url, verified, tags }] }
+  add_court_decisions: async (params = {}) => {
+    const { upsertDecision } = require('./court_decisions');
+    const decisions = Array.isArray(params.decisions) ? params.decisions : [];
+    if (decisions.length === 0) return { saved: 0, note: 'no decisions provided' };
+    let saved = 0;
+    const refused = [];
+    const savedList = [];
+    for (const d of decisions) {
+      const r = await upsertDecision(d);
+      if (r.saved) { saved++; savedList.push(r.case_name); }
+      else refused.push({ case_name: r.case_name, reason: r.reason });
+    }
+    return { saved, refused_count: refused.length, refused, saved_cases: savedList };
   },
 };
 
