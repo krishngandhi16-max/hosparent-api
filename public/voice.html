@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hosparent — Voice AI</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a365d 0%, #2d5a8c 100%);
+      color: #fff;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      max-width: 600px;
+      background: #fff;
+      border-radius: 20px;
+      padding: 3rem 2rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      color: #1a202c;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #1a365d;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+
+    .subtitle {
+      font-size: 0.95rem;
+      color: #718096;
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 1rem 2rem;
+      border-radius: 12px;
+      border: none;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      min-width: 140px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+    }
+
+    .btn-start {
+      background: #16a34a;
+      color: #fff;
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background: #15803d;
+    }
+
+    .btn-finish {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    .btn-finish:hover:not(:disabled) {
+      background: #dc2626;
+    }
+
+    .btn-research {
+      background: #e2e8f0;
+      color: #1a202c;
+    }
+
+    .btn-research.active {
+      background: #3b82f6;
+      color: #fff;
+    }
+
+    .transcript-box {
+      background: #f7fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+      min-height: 100px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 1.05rem;
+      color: #4a5568;
+      line-height: 1.7;
+    }
+
+    .transcript-box.listening {
+      background: #fef2f2;
+      border-color: #fca5a5;
+      color: #b91c1c;
+      animation: pulse 1s infinite;
+    }
+
+    .transcript-box.thinking {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #1e40af;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .input-group {
+      display: flex;
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+
+    input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 1rem;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+    }
+
+    .send-btn {
+      padding: 0.75rem 1.5rem;
+      background: #16a34a;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: #15803d;
+    }
+
+    .conversation {
+      margin-top: 2rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .message {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .message:last-child { border-bottom: none; }
+
+    .message.user {
+      background: #f0fdf4;
+    }
+
+    .message.agent {
+      background: #fffbeb;
+    }
+
+    .message-label {
+      font-weight: 600;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: #718096;
+      margin-bottom: 0.5rem;
+    }
+
+    .message-text {
+      color: #1a202c;
+      line-height: 1.6;
+    }
+
+    .status {
+      text-align: center;
+      font-size: 0.9rem;
+      color: #718096;
+      margin: 1rem 0;
+    }
+
+    .status.active {
+      color: #16a34a;
+      font-weight: 600;
+    }
+
+    @media (max-width: 640px) {
+      .container { padding: 2rem 1rem; }
+      h1 { font-size: 1.5rem; }
+      button { min-width: 100px; padding: 0.75rem 1rem; font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎤 Hosparent Voice</h1>
+    <p class="subtitle">Ask about hospital pricing, costs, and healthcare finance</p>
+
+    <div class="controls">
+      <button id="startBtn" class="btn-start">▶ START</button>
+      <button id="finishBtn" class="btn-finish" disabled>⏹ FINISH</button>
+      <button id="researchBtn" class="btn-research">🔬 Research</button>
+    </div>
+
+    <div class="status" id="status">Ready to listen</div>
+
+    <div class="transcript-box" id="transcript">Click START to begin speaking…</div>
+
+    <div class="input-group">
+      <input id="q" type="text" placeholder="Or type a question here…" />
+      <button id="send" class="send-btn">Ask</button>
+    </div>
+
+    <div class="conversation" id="log"></div>
+  </div>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const finishBtn = document.getElementById('finishBtn');
+  const researchBtn = document.getElementById('researchBtn');
+  const qEl = document.getElementById('q');
+  const sendBtn = document.getElementById('send');
+  const transcriptDisplay = document.getElementById('transcript');
+  const statusDisplay = document.getElementById('status');
+  const log = document.getElementById('log');
+
+  let rec = null;
+  let isRecording = false;
+  let recordedText = '';
+  let researchMode = false;
+  let isSpeaking = false;
+
+  function updateStatus(text, isActive = false) {
+    statusDisplay.textContent = text;
+    statusDisplay.className = isActive ? 'status active' : 'status';
+  }
+
+  function updateTranscript(text, state = 'ready') {
+    transcriptDisplay.textContent = text || 'Ready…';
+    transcriptDisplay.className = 'transcript-box';
+    if (state === 'listening') transcriptDisplay.classList.add('listening');
+    if (state === 'thinking') transcriptDisplay.classList.add('thinking');
+  }
+
+  function add(text, who) {
+    const div = document.createElement('div');
+    div.className = 'message ' + who;
+
+    const label = document.createElement('div');
+    label.className = 'message-label';
+    label.textContent = who === 'user' ? '👤 You' : '🤖 Hoser';
+    div.appendChild(label);
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'message-text';
+    textDiv.textContent = text;
+    div.appendChild(textDiv);
+
+    log.prepend(div);
+  }
+
+  function playAudio(blob) {
+    const audio = new Audio(URL.createObjectURL(blob));
+    isSpeaking = true;
+    audio.onended = () => { isSpeaking = false; };
+    audio.onerror = () => { isSpeaking = false; };
+    audio.play();
+  }
+
+  async function ask(question) {
+    if (!question) return;
+    add(question, 'user');
+    qEl.value = '';
+    updateTranscript('Thinking…', 'thinking');
+    updateStatus('Processing…', true);
+
+    try {
+      const url = researchMode ? '/agent?research=true' : '/agent';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      const answer = data.answer || data.error || '(no answer)';
+      add(answer, 'agent');
+      updateTranscript(answer, 'ready');
+      updateStatus('✓ Done', true);
+
+      // Play audio response
+      try {
+        const audioRes = await fetch('/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: answer }),
+        });
+        const blob = await audioRes.blob();
+        playAudio(blob);
+      } catch (e) {
+        console.warn('Audio failed:', e.message);
+      }
+    } catch (e) {
+      const msg = 'Error: ' + e.message;
+      add(msg, 'agent');
+      updateTranscript(msg, 'ready');
+      updateStatus('Error', false);
+    }
+  }
+
+  researchBtn.onclick = () => {
+    researchMode = !researchMode;
+    researchBtn.classList.toggle('active');
+    updateStatus(researchMode ? '🔬 Research Mode ON (Opus)' : '🔬 Research Mode OFF (Haiku)', researchMode);
+  };
+
+  sendBtn.onclick = () => {
+    const q = qEl.value.trim();
+    if (q) ask(q);
+  };
+
+  qEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const q = qEl.value.trim();
+      if (q) ask(q);
+    }
+  });
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    rec.continuous = true;
+
+    rec.onstart = () => {
+      isRecording = true;
+      recordedText = '';
+      updateStatus('Listening…', true);
+      updateTranscript('Listening… speak now', 'listening');
+      finishBtn.disabled = false;
+      startBtn.disabled = true;
+    };
+
+    rec.onresult = (e) => {
+      let interim = '';
+      let final = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          final += transcript + ' ';
+        } else {
+          interim += transcript;
+        }
+      }
+      recordedText = final || interim;
+      updateTranscript(recordedText || 'listening…', 'listening');
+    };
+
+    rec.onerror = (e) => {
+      updateStatus('Error: ' + e.error, false);
+      updateTranscript('Error: ' + e.error, 'ready');
+      isRecording = false;
+      finishBtn.disabled = true;
+      startBtn.disabled = false;
+    };
+
+    rec.onend = () => {
+      isRecording = false;
+      finishBtn.disabled = true;
+      startBtn.disabled = false;
+    };
+
+    startBtn.onclick = () => {
+      recordedText = '';
+      try { rec.start(); } catch (e) { console.error(e); }
+    };
+
+    finishBtn.onclick = () => {
+      try { rec.stop(); } catch (e) { console.error(e); }
+      if (recordedText.trim()) {
+        ask(recordedText.trim());
+      } else {
+        updateStatus('No speech detected', false);
+        updateTranscript('No speech detected. Try again.', 'ready');
+      }
+    };
+  } else {
+    startBtn.disabled = true;
+    startBtn.textContent = '🎤 (not supported)';
+    updateStatus('Speech recognition not supported', false);
+  }
+</script>
+</body>
+</html>

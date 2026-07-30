@@ -176,6 +176,26 @@ async function main() {
   }
   console.log(`  ${CPT_BOUNDS.length} CPT bounds loaded`);
 
+  // Per-price-type bounds — the live API filter judges negotiated/gross prices
+  // against these (falling back to the cash window when NULL). Create if missing,
+  // and fill defaults ONLY where NULL so manual tuning (add_negotiated_bounds.sql)
+  // is preserved.
+  await pool.query(`
+    ALTER TABLE cpt_price_bounds
+      ADD COLUMN IF NOT EXISTS min_negotiated NUMERIC,
+      ADD COLUMN IF NOT EXISTS max_negotiated NUMERIC,
+      ADD COLUMN IF NOT EXISTS min_gross NUMERIC,
+      ADD COLUMN IF NOT EXISTS max_gross NUMERIC
+  `);
+  await pool.query(`
+    UPDATE cpt_price_bounds SET
+      min_negotiated = COALESCE(min_negotiated, ROUND(min_cash * 0.3, 2)),
+      max_negotiated = COALESCE(max_negotiated, max_cash),
+      min_gross      = COALESCE(min_gross, min_cash),
+      max_gross      = COALESCE(max_gross, ROUND(max_cash * 1.5, 2))
+  `);
+  console.log('  per-type (negotiated/gross) bounds ensured');
+
   // ── STEP 2: fix name/CPT mismatches ─────────────────────────
   console.log('\n[2/5] Fixing name→CPT mismatches (the $199 colonoscopy bug)...');
   for (const rule of NAME_CPT_RULES) {
@@ -224,15 +244,53 @@ async function main() {
 
   const flagNeg = await pool.query(`
     UPDATE prices pr SET is_suspicious = true,
-      validation_reason = b.procedure_label || ' negotiated: outside $' || (b.min_cash*0.3)::int || '-$' || b.max_cash
+      validation_reason = b.procedure_label || ' negotiated: outside $' || COALESCE(b.min_negotiated, ROUND(b.min_cash*0.3,2)) || '-$' || COALESCE(b.max_negotiated, b.max_cash)
     FROM procedures p, cpt_price_bounds b
     WHERE pr.procedure_id = p.id
     AND p.cpt_code = b.cpt_code
     AND pr.price_type = 'negotiated'
     AND pr.is_suspicious IS NOT TRUE
-    AND (pr.price < b.min_cash * 0.3 OR pr.price > b.max_cash)
+    AND (pr.price < COALESCE(b.min_negotiated, b.min_cash*0.3) OR pr.price > COALESCE(b.max_negotiated, b.max_cash))
   `);
-  console.log(`  Flagged ${flagNeg.rowCount} negotiated prices (negotiated floor = 30% of cash floor)`);
+  console.log(`  Flagged ${flagNeg.rowCount} negotiated prices (vs per-type negotiated bounds)`);
+
+  // NEW: gross prices were never flagged in `prices` before — flag them against
+  // their own gross window (previously they were only ever checked, at read time,
+  // against the cash ceiling, which hid legitimately-high gross charges).
+  const flagGross = await pool.query(`
+    UPDATE prices pr SET is_suspicious = true,
+      validation_reason = b.procedure_label || ' gross: outside $' || COALESCE(b.min_gross, b.min_cash) || '-$' || COALESCE(b.max_gross, ROUND(b.max_cash*1.5,2))
+    FROM procedures p, cpt_price_bounds b
+    WHERE pr.procedure_id = p.id
+    AND p.cpt_code = b.cpt_code
+    AND pr.price_type = 'gross'
+    AND pr.is_suspicious IS NOT TRUE
+    AND (pr.price < COALESCE(b.min_gross, b.min_cash) OR pr.price > COALESCE(b.max_gross, b.max_cash*1.5))
+  `);
+  console.log(`  Flagged ${flagGross.rowCount} gross prices (vs per-type gross bounds)`);
+
+  // RECONCILE: un-flag prices previously flagged by bounds that now sit inside
+  // their per-type window (e.g. after bounds were widened or the per-type columns
+  // were populated). Only touches bounds-flagged rows (validation_reason IS NOT
+  // NULL); flags set for any other reason are left alone. This is what makes the
+  // negotiated/gross prices TryBilly shows become visible again.
+  const unflag = await pool.query(`
+    UPDATE prices pr SET is_suspicious = false, validation_reason = NULL
+    FROM procedures p, cpt_price_bounds b
+    WHERE pr.procedure_id = p.id
+    AND p.cpt_code = b.cpt_code
+    AND pr.is_suspicious IS TRUE
+    AND pr.validation_reason IS NOT NULL
+    AND pr.price >= (CASE lower(pr.price_type)
+                       WHEN 'negotiated' THEN COALESCE(b.min_negotiated, b.min_cash)
+                       WHEN 'gross'      THEN COALESCE(b.min_gross, b.min_cash)
+                       ELSE b.min_cash END)
+    AND pr.price <= (CASE lower(pr.price_type)
+                       WHEN 'negotiated' THEN COALESCE(b.max_negotiated, b.max_cash)
+                       WHEN 'gross'      THEN COALESCE(b.max_gross, b.max_cash)
+                       ELSE b.max_cash END)
+  `);
+  console.log(`  Reconciled (un-flagged) ${unflag.rowCount} prices now within per-type bounds`);
 
   // ── STEP 4: flag imaging_prices too ─────────────────────────
   console.log('\n[4/5] Validating imaging_prices table...');
