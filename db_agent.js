@@ -402,6 +402,26 @@ const SAFE_FIXES = {
     }
     return { saved, refused_count: refused.length, refused, saved_cases: savedList };
   },
+
+  // Save researched healthcare-finance FINDINGS (CMS/KFF/GAO reports, Medicare
+  // benchmarks, negotiated-rate observations, studies) to research_findings. Same
+  // rule as court decisions: every entry needs a real source_url or it's refused.
+  // params: { findings: [{ topic, title, summary, detail, key_figures, publisher,
+  //           published_date, source_title, source_url, verified, tags }] }
+  save_research_findings: async (params = {}) => {
+    const { upsertFinding } = require('./research_findings');
+    const findings = Array.isArray(params.findings) ? params.findings : [];
+    if (findings.length === 0) return { saved: 0, note: 'no findings provided' };
+    let saved = 0;
+    const refused = [];
+    const savedList = [];
+    for (const f of findings) {
+      const r = await upsertFinding(f);
+      if (r.saved) { saved++; savedList.push(r.title); }
+      else refused.push({ title: r.title, reason: r.reason });
+    }
+    return { saved, refused_count: refused.length, refused, saved_findings: savedList };
+  },
 };
 
 // Block SSRF: never let a research tool reach loopback, link-local (cloud
@@ -688,19 +708,26 @@ function resetConversation() {
 }
 
 /**
- * Answer a natural-language question.
- * Sonnet 5 by default (thinks on its own: full tool use + web search). Opus on
- * demand for the hardest research/analysis. Options: { research: true } → Opus.
- * @returns {Promise<{answer: string, actions_taken: object[], model: string}>}
+ * Answer a natural-language question with the office agent engine.
+ * Runs on the free provider (llm.js) by default; escalates to Anthropic only when
+ * asked or when the free brain flags it can't handle the task.
+ * @param {string} question
+ * @param {object} [options]
+ * @param {boolean} [options.research]      force the deeper/Opus path
+ * @param {boolean} [options.claude]        force the Anthropic path
+ * @param {string}  [options.system]        persona/system prompt override (e.g. Tracy)
+ * @param {boolean} [options.autoEscalate]  free → Opus ONLY when the free model emits <<ESCALATE>>
+ * @returns {Promise<{answer, actions_taken, model, research_mode, escalated}>}
  */
 async function runAgent(question, options = {}) {
   const actions = [];
   const useResearch = options.research === true;
   const q = String(question || '');
+  const system = options.system || SYSTEM_FULL();
 
   // ── cheap/free path ───────────────────────────────────────────────────────
-  // Same tools, same system prompt, run on whatever provider llm.js found
-  // (Groq free tier = $0). Pass options.claude=true to force the Anthropic path.
+  // Same tools, run on whatever provider llm.js found (Groq/Kimi/etc, $0).
+  // Pass options.claude=true to force the Anthropic path.
   if (llm.isConfigured() && options.claude !== true) {
     const tools = buildClientTools(actions);
     if (perplexity.isConfigured()) {
@@ -717,31 +744,39 @@ async function runAgent(question, options = {}) {
       });
     }
     const { text } = await llm.runToolLoop({
-      system: SYSTEM_FULL(),
+      system,
       messages: [...conversationHistory, { role: 'user', content: q }],
       tools,
-      // Room to actually investigate (probe → dead end → new hypothesis → verify),
-      // not just 1–2 calls. The investigator prompt expects 5–12 tool calls.
+      // Room to actually investigate (probe → dead end → new hypothesis → verify).
       maxRounds: useResearch ? 24 : 16,
     });
-    rememberExchange(q, text);
-    return { answer: text, actions_taken: actions, model: llm.describe(), research_mode: useResearch };
+
+    // Auto-escalate: the free brain flagged (with <<ESCALATE>>) that it can't
+    // adequately handle this. Hand off to Opus with the SAME persona. Opus fires
+    // ONLY here — never for a question the free model completes — so the paid tier
+    // is reserved for exactly "what the regular one can't handle."
+    if (options.autoEscalate && /<<\s*ESCALATE\s*>>/i.test(text) && process.env.ANTHROPIC_API_KEY) {
+      return runAgent(q, { ...options, claude: true, research: true, autoEscalate: false, system, _escalatedFrom: llm.describe() });
+    }
+
+    const clean = text.replace(/<<\s*ESCALATE\s*>>/gi, '').trim();
+    rememberExchange(q, clean);
+    return { answer: clean, actions_taken: actions, model: llm.describe(), research_mode: useResearch, escalated: false };
   }
 
-  // ── Anthropic fallback (needs ANTHROPIC_API_KEY + credits) ────────────────
+  // ── Anthropic path (Opus/Sonnet — needs ANTHROPIC_API_KEY + credits) ──────
   const client = getClient();
   const model = useResearch ? MODEL_RESEARCH : MODEL_DEFAULT;
   const tools = buildClientTools(actions);
   const params = {
     model,
     max_tokens: 4096,
-    system: SYSTEM_FULL(),
+    system,
     tools,
     messages: [...conversationHistory, { role: 'user', content: q }],
   };
 
-  // Group B: open web. Both Sonnet 5 and Opus support server-side web search,
-  // so the agent can research on his own in every mode.
+  // Group B: open web. Both Sonnet 5 and Opus support server-side web search.
   params.tools.push({ type: 'web_search_20260209', name: 'web_search' });
 
   // Group C: healthcare MCP connectors (Turquoise, PubMed, ...), if configured.
@@ -757,11 +792,12 @@ async function runAgent(question, options = {}) {
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('\n')
+    .replace(/<<\s*ESCALATE\s*>>/gi, '')
     .trim();
 
   rememberExchange(q, answer);
 
-  return { answer, actions_taken: actions, model, research_mode: useResearch };
+  return { answer, actions_taken: actions, model, research_mode: useResearch, escalated: Boolean(options._escalatedFrom) };
 }
 
-module.exports = { runAgent, resetConversation, diagnosePrice, SAFE_FIXES };
+module.exports = { runAgent, resetConversation, diagnosePrice, SAFE_FIXES, SYSTEM_PROMPT, OFFICE_BRAIN };

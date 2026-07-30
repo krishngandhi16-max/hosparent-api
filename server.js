@@ -1194,6 +1194,33 @@ app.get('/learn/court-decisions', async (req, res) => {
   }
 });
 
+// Tracy's saved healthcare-finance research (each with a real source_url).
+app.get('/learn/research', async (req, res) => {
+  try {
+    const { getFindings } = require('./research_findings');
+    res.json({ findings: await getFindings(req.query.topic) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TRACY — healthcare finance specialist ─────────────────
+// POST { question, research? } -> Tracy answers with a finance lens, using the
+// office tools. Runs FREE by default; escalates to Opus only when he flags
+// <<ESCALATE>> (i.e. only what the regular model can't handle).
+app.post('/tracy', async (req, res) => {
+  try {
+    const { question, research } = req.body || {};
+    if (!question) return res.status(400).json({ error: 'missing "question"' });
+    const tracy = require('./tracy');
+    const out = await tracy.ask(String(question), { research: research === true });
+    res.json(out);
+  } catch (err) {
+    console.error('[/tracy]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/learn/insurance-news', async (req, res) => {
   try {
     res.json({ stories: await learn.getInsuranceNews() });
